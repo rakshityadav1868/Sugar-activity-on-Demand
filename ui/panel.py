@@ -104,26 +104,26 @@ class CreateAIActivityPanel(Gtk.EventBox):
         self._option_buttons = {}
         self._selected_options = {
             'template': 'logic_math',
+            'learning_areas': ['logic_math'],
             'age_band': 'all',
             'collab': 'solo',
             'planner': 'rag',
             'policy': 'creative',
-            'validate': 'on',
             'enhance': 'on',
             'provider': 'default',
             'license': 'mit',
             'code_size': 'standard',
         }
         self._code_size_combo = None
-        self._sidebar_visible = True
+        self._sidebar_visible = False
         self._sidebar_toggle_button = None
         self._sidebar_revealer = None
         self._template_hint = None
         self._planner_hint = None
-        self._validate_chip_value_label = None
         self._provider_chip_value_label = None
         self._template_card_icons = {}
         self._template_card_buttons = {}
+        self._learning_area_selection_started = False
         self._provider_combo = None
         self._provider_key_entry = None
         self._provider_paste_button = None
@@ -216,7 +216,9 @@ class CreateAIActivityPanel(Gtk.EventBox):
         self._live_edit_target_kind = 'widget'
         self._live_edit_on_button = None
         self._live_edit_off_button = None
-        self._live_edit_enabled = True
+        # Play mode is the safe, unsurprising default: preview clicks reach
+        # the generated activity until the learner explicitly enables edits.
+        self._live_edit_enabled = False
         self._live_edit_handler_ids = []
         self._live_edit_highlighted = None
         self._live_edit_panel = None
@@ -723,20 +725,6 @@ class CreateAIActivityPanel(Gtk.EventBox):
         bottom_row.pack_start(hint_icon, False, False, 0)
         hint_icon.show()
 
-        validate_chip = Gtk.ToggleButton()
-        validate_chip.set_relief(Gtk.ReliefStyle.NONE)
-        validate_chip.get_style_context().add_class('create-ai-prompt-chip')
-        validate_chip.get_style_context().add_class(
-            'create-ai-prompt-chip-active')
-        validate_content, validate_value = self._build_chip_content(
-            _('Validation'), _('On'))
-        validate_chip.add(validate_content)
-        self._validate_chip_value_label = validate_value
-        validate_chip.set_active(True)
-        validate_chip.connect('toggled', self.__validate_chip_toggled_cb)
-        bottom_row.pack_start(validate_chip, False, False, 0)
-        validate_chip.show()
-
         enhance_chip = Gtk.ToggleButton()
         enhance_chip.set_relief(Gtk.ReliefStyle.NONE)
         enhance_chip.get_style_context().add_class('create-ai-prompt-chip')
@@ -823,7 +811,7 @@ class CreateAIActivityPanel(Gtk.EventBox):
         bottom_row.pack_end(model_chip, False, False, 0)
         model_chip.show()
 
-        cards_caption = Gtk.Label(_('Start with a learning area...'))
+        cards_caption = Gtk.Label(_('Select one or more learning areas...'))
         cards_caption.get_style_context().add_class(
             'create-ai-template-caption')
         cards_caption.set_halign(Gtk.Align.CENTER)
@@ -845,7 +833,7 @@ class CreateAIActivityPanel(Gtk.EventBox):
                                               card_detail, icon_name)
             card.set_margin_top(
                 style.zoom(fan_offsets[index % len(fan_offsets)]))
-            if value == self._selected_options.get('template'):
+            if value in self._selected_learning_areas():
                 card.get_style_context().add_class(
                     'create-ai-option-card-active')
             cards_row.pack_start(card, False, False, 0)
@@ -985,14 +973,39 @@ class CreateAIActivityPanel(Gtk.EventBox):
         return button
 
     def _update_template_card_icons(self):
-        selected = self._selected_options.get('template')
+        selected = self._selected_learning_areas()
         for value, icon in self._template_card_icons.items():
-            if value == selected:
+            if value in selected:
                 icon.props.stroke_color = style.COLOR_WHITE.get_svg()
                 icon.props.fill_color = style.COLOR_BUTTON_GREY.get_svg()
             else:
                 icon.props.stroke_color = style.COLOR_TOOLBAR_GREY.get_svg()
                 icon.props.fill_color = style.COLOR_INACTIVE_FILL.get_svg()
+
+    def _selected_learning_areas(self):
+        valid = [value for value, unused_title, unused_detail, unused_icon
+                 in self._get_learning_area_options()]
+        selected = self._selected_options.get('learning_areas', ())
+        if not isinstance(selected, (list, tuple)):
+            selected = ()
+        clean = []
+        for value in selected:
+            if value in valid and value not in clean:
+                clean.append(value)
+        if not clean:
+            fallback = self._selected_options.get('template', 'logic_math')
+            clean = [fallback if fallback in valid else 'logic_math']
+        return clean
+
+    def _set_learning_area_card_states(self):
+        selected = self._selected_learning_areas()
+        for value, button in self._template_card_buttons.items():
+            context = button.get_style_context()
+            if value in selected:
+                context.add_class('create-ai-option-card-active')
+            else:
+                context.remove_class('create-ai-option-card-active')
+        self._update_template_card_icons()
 
     def __enhance_chip_toggled_cb(self, button):
         active = button.get_active()
@@ -1107,10 +1120,12 @@ class CreateAIActivityPanel(Gtk.EventBox):
         }
         age_band = age_band_map.get(
             self._selected_options.get('age_band', 'all'), 'all')
+        learning_areas = self._selected_learning_areas()
         return ActivitySpec(
             name=name_from_prompt(prompt),
             prompt=prompt,
-            category=self._selected_options.get('template', 'logic_math'),
+            category=learning_areas[0],
+            categories=tuple(learning_areas),
             license_id=self._get_selected_license()['spdx'],
             code_size=self._selected_options.get('code_size', 'standard'),
             age_band=age_band,
@@ -1169,6 +1184,12 @@ class CreateAIActivityPanel(Gtk.EventBox):
         self._stack.set_visible_child_name('studio')
         if self._studio_mode_stack is not None:
             self._studio_mode_stack.set_visible_child_name('guided')
+        # Switching from the create page gives the nested pane a sequence of
+        # progressively larger allocations. Keep a closed sidebar pinned to
+        # the current right edge during that transition so it cannot flash
+        # while the question worker is running.
+        self._enforce_closed_sidebar_position()
+        GObject.idle_add(self._enforce_closed_sidebar_position)
         self._set_studio_tabs_locked(True)
 
     def _set_studio_tabs_locked(self, locked):
@@ -1305,32 +1326,64 @@ class CreateAIActivityPanel(Gtk.EventBox):
         state = self._guided_state
         getters = {}
 
-        title = Gtk.Label(_('A few quick questions'))
+        header = Gtk.HBox(spacing=style.zoom(12))
+        header.set_hexpand(True)
+
+        heading = Gtk.VBox(spacing=style.zoom(4))
+        heading.set_hexpand(True)
+        header.pack_start(heading, True, True, 0)
+
+        title = Gtk.Label(_('Shape your activity'))
         title.get_style_context().add_class('create-ai-guided-title')
         title.set_halign(Gtk.Align.START)
         title.set_xalign(0)
-        self._guided_body.pack_start(title, False, False, 0)
+        heading.pack_start(title, False, False, 0)
 
         subtitle = Gtk.Label(
-            _('So I build the right thing for: %s') % state['prompt'])
+            _('A few choices help tailor “%s” to what you want to make.')
+            % state['prompt'])
         subtitle.set_halign(Gtk.Align.START)
         subtitle.set_line_wrap(True)
+        subtitle.set_max_width_chars(90)
         subtitle.set_xalign(0)
         subtitle.get_style_context().add_class('create-ai-guided-subtitle')
-        self._guided_body.pack_start(subtitle, False, False, 0)
+        heading.pack_start(subtitle, False, False, 0)
+
+        count = Gtk.Label(
+            _('%d questions · about 1 minute') % len(questions))
+        count.get_style_context().add_class('create-ai-guided-count')
+        count.set_valign(Gtk.Align.CENTER)
+        header.pack_end(count, False, False, 0)
+
+        self._guided_body.pack_start(header, False, False, 0)
 
         for index, question in enumerate(questions):
             getters[question['id']] = self._render_question(question, index)
 
         footer = Gtk.HBox(spacing=style.zoom(8))
-        footer.set_margin_top(style.zoom(10))
-        skip = Gtk.Button(label=_('Skip'))
+        footer.get_style_context().add_class('create-ai-guided-footer')
+        footer.set_margin_top(style.zoom(4))
+
+        footer_note = Gtk.Label(
+            _('You can skip any question or add your own answer.'))
+        footer_note.get_style_context().add_class(
+            'create-ai-guided-footer-note')
+        footer_note.set_xalign(0)
+        footer.pack_start(footer_note, True, True, 0)
+
+        footer_actions = Gtk.HBox(spacing=style.zoom(8))
+        footer.pack_end(footer_actions, False, False, 0)
+
+        skip = Gtk.Button(label=_('Skip questions'))
+        skip.get_style_context().add_class('create-ai-guided-skip')
         skip.connect('clicked', self.__guided_skip_clicked_cb)
-        footer.pack_start(skip, False, False, 0)
-        cont = Gtk.Button(label=_('Continue'))
+        footer_actions.pack_start(skip, False, False, 0)
+
+        cont = Gtk.Button(label=_('Continue →'))
         cont.get_style_context().add_class('create-ai-studio-primary')
+        cont.set_size_request(style.zoom(132), style.zoom(40))
         cont.connect('clicked', self.__guided_continue_clicked_cb)
-        footer.pack_end(cont, False, False, 0)
+        footer_actions.pack_start(cont, False, False, 0)
         self._guided_body.pack_start(footer, False, False, 0)
 
         state['answer_widgets'] = getters
@@ -1341,25 +1394,33 @@ class CreateAIActivityPanel(Gtk.EventBox):
     def _add_other_entry(self, box):
         """Add an 'Other…' write-in field to a choice question."""
         entry = Gtk.Entry()
-        entry.set_placeholder_text(_('Other…'))
+        entry.set_placeholder_text(_('Something else (optional)…'))
         entry.get_style_context().add_class('create-ai-guided-entry')
         entry.set_halign(Gtk.Align.START)
-        entry.set_size_request(style.zoom(260), -1)
+        entry.set_size_request(style.zoom(360), style.zoom(38))
         box.pack_start(entry, False, False, 0)
         return entry
 
     def _make_guided_chip(self, label):
         chip = Gtk.ToggleButton(label=label)
+        chip._guided_value = label
         chip.set_relief(Gtk.ReliefStyle.NONE)
         chip.get_style_context().add_class('create-ai-guided-chip')
+        chip_label = chip.get_child()
+        if isinstance(chip_label, Gtk.Label):
+            chip_label.set_line_wrap(True)
+            chip_label.set_max_width_chars(34)
+            chip_label.set_justify(Gtk.Justification.CENTER)
         return chip
 
     def _sync_guided_chip(self, chip):
         ctx = chip.get_style_context()
         if chip.get_active():
             ctx.add_class('create-ai-guided-chip-active')
+            chip.set_label('✓ %s' % chip._guided_value)
         else:
             ctx.remove_class('create-ai-guided-chip-active')
+            chip.set_label(chip._guided_value)
 
     def __guided_multi_chip_toggled_cb(self, chip):
         self._sync_guided_chip(chip)
@@ -1379,7 +1440,10 @@ class CreateAIActivityPanel(Gtk.EventBox):
     def _new_guided_flowbox(self):
         flow = Gtk.FlowBox()
         flow.set_selection_mode(Gtk.SelectionMode.NONE)
-        flow.set_max_children_per_line(8)
+        # Three columns prevent long model-generated choices from becoming
+        # cramped single-line pills on wide screens; FlowBox still reduces
+        # the column count responsively when the preview is narrower.
+        flow.set_max_children_per_line(3)
         flow.set_min_children_per_line(1)
         flow.set_column_spacing(style.zoom(6))
         flow.set_row_spacing(style.zoom(6))
@@ -1389,18 +1453,38 @@ class CreateAIActivityPanel(Gtk.EventBox):
         return flow
 
     def _render_question(self, question, index=0):
-        card = Gtk.VBox(spacing=style.zoom(9))
+        card = Gtk.VBox(spacing=style.zoom(11))
         card.get_style_context().add_class('create-ai-guided-card')
+
+        question_header = Gtk.HBox(spacing=style.zoom(10))
+        question_header.set_hexpand(True)
+
+        number = Gtk.Label(str(index + 1))
+        number.get_style_context().add_class('create-ai-guided-number')
+        number.set_halign(Gtk.Align.CENTER)
+        number.set_valign(Gtk.Align.START)
+        question_header.pack_start(number, False, False, 0)
 
         label = Gtk.Label(question['label'])
         label.get_style_context().add_class('create-ai-guided-question')
         label.set_halign(Gtk.Align.START)
         label.set_line_wrap(True)
         label.set_xalign(0)
-        card.pack_start(label, False, False, 0)
+        label.set_hexpand(True)
+        question_header.pack_start(label, True, True, 0)
 
         qtype = question.get('type', 'text')
         options = question.get('options', [])
+        type_labels = {
+            'single': _('Choose one'),
+            'multi': _('Choose any'),
+            'text': _('Optional'),
+        }
+        type_hint = Gtk.Label(type_labels.get(qtype, _('Optional')))
+        type_hint.get_style_context().add_class('create-ai-guided-type')
+        type_hint.set_valign(Gtk.Align.START)
+        question_header.pack_end(type_hint, False, False, 0)
+        card.pack_start(question_header, False, False, 0)
 
         if qtype == 'single' and options:
             flow = self._new_guided_flowbox()
@@ -1423,7 +1507,7 @@ class CreateAIActivityPanel(Gtk.EventBox):
                     return typed
                 for chip in chips:
                     if chip.get_active():
-                        return chip.get_label()
+                        return chip._guided_value
                 return ''
             return getter
 
@@ -1441,7 +1525,7 @@ class CreateAIActivityPanel(Gtk.EventBox):
             self._guided_body.pack_start(card, False, False, 0)
 
             def getter(chips=chips, other=other):
-                values = [chip.get_label() for chip in chips
+                values = [chip._guided_value for chip in chips
                           if chip.get_active()]
                 typed = other.get_text().strip()
                 if typed:
@@ -1450,7 +1534,8 @@ class CreateAIActivityPanel(Gtk.EventBox):
             return getter
 
         entry = Gtk.Entry()
-        entry.set_placeholder_text(_('Your answer…'))
+        entry.set_placeholder_text(
+            _('Add details, preferences, or anything I should preserve…'))
         entry.get_style_context().add_class('create-ai-guided-entry')
         entry.set_hexpand(True)
         card.pack_start(entry, False, False, 0)
@@ -1740,22 +1825,6 @@ class CreateAIActivityPanel(Gtk.EventBox):
         self._guided_running = False
         self._set_studio_tabs_locked(False)
         self._submit_generation_from_prompt(enriched, chat_prompt=original)
-
-    def __validate_chip_toggled_cb(self, button):
-        active = button.get_active()
-        self._selected_options['validate'] = 'on' if active else 'off'
-        if self._validate_chip_value_label is not None:
-            self._validate_chip_value_label.set_text(
-                _('On') if active else _('Off'))
-        if active:
-            button.get_style_context().add_class(
-                'create-ai-prompt-chip-active')
-        else:
-            button.get_style_context().remove_class(
-                'create-ai-prompt-chip-active')
-        if self._prompt_status_label is not None:
-            self._prompt_status_label.set_text(
-                _('Validation on') if active else _('Validation off'))
 
     def _create_section_label(self, text):
         label = Gtk.Label(text)
@@ -2082,6 +2151,16 @@ class CreateAIActivityPanel(Gtk.EventBox):
         inner.pack1(self._create_studio_preview_panel(), True, True)
         self._studio_right_panel = self._create_learning_sidebar()
         inner.pack2(self._studio_right_panel, False, False)
+        # The learning sidebar starts collapsed. Allow the second pane to
+        # shrink past its content minimum so the preview receives the full
+        # width until the learner explicitly opens it.
+        self._set_pane_shrink(inner, self._studio_right_panel, True)
+        # Geometry alone is not enough here: Gtk.Paned can briefly allocate
+        # its second child while a hidden stack page becomes visible. Keep
+        # the closed sidebar widget genuinely invisible until its toggle is
+        # used.
+        self._studio_right_panel.set_no_show_all(True)
+        self._studio_right_panel.hide()
 
         body.set_position(style.zoom(455))
         # The right divider needs the pane's real width, known only
@@ -2860,7 +2939,7 @@ class CreateAIActivityPanel(Gtk.EventBox):
             False, False, 0)
 
         self._sidebar_toggle_button = self._create_plain_button(
-            _('◀ Sidebar'), self.__sidebar_toggle_cb)
+            _('▶ Sidebar'), self.__sidebar_toggle_cb)
         top.pack_end(self._sidebar_toggle_button, False, False, 0)
 
         tabs = Gtk.HBox(spacing=style.zoom(8))
@@ -5036,13 +5115,13 @@ class CreateAIActivityPanel(Gtk.EventBox):
         pill.show()
         return pill
 
-    def _create_live_toggle_button(self, label, active):
+    def _create_live_toggle_button(self, label, enabled):
         button = Gtk.Button.new_with_label(label)
         button.set_relief(Gtk.ReliefStyle.NONE)
         button.get_style_context().add_class('create-ai-live-toggle')
-        if active:
+        if enabled == self._live_edit_enabled:
             button.get_style_context().add_class('create-ai-live-toggle-active')
-        button.connect('clicked', self.__live_toggle_clicked_cb, active)
+        button.connect('clicked', self.__live_toggle_clicked_cb, enabled)
         button.show()
         return button
 
@@ -6074,9 +6153,17 @@ if clipboard.wait_is_text_available():
             'creation': _('Making and expression — drawing canvases, music '
                           'makers, collage builders, animations.'),
         }
+        selected = self._selected_learning_areas()
+        labels = dict(
+            (value, title) for value, title, unused_detail, unused_icon
+            in self._get_learning_area_options())
+        descriptions = [notes.get(value, value) for value in selected]
         self._template_hint.set_text(
-            notes.get(self._selected_options['template'],
-                      self._selected_options['template']))
+            _('Learning areas: %(areas)s — %(descriptions)s') % {
+                'areas': ' + '.join(labels.get(value, value)
+                                    for value in selected),
+                'descriptions': ' '.join(descriptions),
+            })
 
     def _update_license_hint(self):
         if self._license_hint is None:
@@ -8395,6 +8482,40 @@ if clipboard.wait_is_text_available():
             self._is_fullscreen = True
 
     def __option_card_clicked_cb(self, clicked_button, group_name, value):
+        if group_name == 'template':
+            selected = self._selected_learning_areas()
+            if not self._learning_area_selection_started:
+                # The preselected area is a suggestion.  The learner's first
+                # different choice replaces it; later choices add/remove
+                # areas, making combinations such as Science + Games direct.
+                self._learning_area_selection_started = True
+                if value not in selected:
+                    selected = [value]
+            elif value in selected:
+                # Keep at least one area selected so every request retains a
+                # valid primary category.
+                if len(selected) > 1:
+                    selected.remove(value)
+            else:
+                selected.append(value)
+            self._selected_options['learning_areas'] = selected
+            self._selected_options['template'] = selected[0]
+            self._set_learning_area_card_states()
+            self._update_template_hint()
+            self._refresh_generated_context()
+
+            labels = dict(
+                (item_value, title)
+                for item_value, title, unused_detail, unused_icon
+                in self._get_learning_area_options())
+            if self._prompt_status_label is not None:
+                self._prompt_status_label.set_text(
+                    _('%d learning areas: %s') % (
+                        len(selected),
+                        ', '.join(labels.get(item, item)
+                                  for item in selected)))
+            return
+
         for button in self._option_buttons[group_name]:
             button.get_style_context().remove_class(
                 'create-ai-option-card-active')
@@ -8402,10 +8523,7 @@ if clipboard.wait_is_text_available():
             'create-ai-option-card-active')
         self._selected_options[group_name] = value
 
-        if group_name == 'template':
-            self._update_template_hint()
-            self._update_template_card_icons()
-        elif group_name in ('planner', 'policy'):
+        if group_name in ('planner', 'policy'):
             self._update_planner_hint()
         elif group_name == 'license':
             self._update_license_hint()
@@ -8654,12 +8772,14 @@ if clipboard.wait_is_text_available():
             'class': _('Whole class activity with teacher facilitation. '),
         }.get(self._selected_options.get('collab', 'solo'), '')
 
+        learning_areas = self._selected_learning_areas()
         spec = ActivitySpec(
             # Name from the learner's actual idea, not the answers-enriched
             # prompt (which would read like "Confirmed requirements ...").
             name=name_from_prompt(chat_prompt or prompt),
             prompt=collab_prefix + prompt,
-            category=self._selected_options['template'],
+            category=learning_areas[0],
+            categories=tuple(learning_areas),
             license_id=license_info['spdx'],
             code_size=self._selected_options.get('code_size', 'standard'),
             age_band=age_band,
@@ -8749,6 +8869,7 @@ if clipboard.wait_is_text_available():
             name=base_spec.name,
             prompt=prompt,
             category=base_spec.category,
+            categories=base_spec.learning_categories(),
             license_id=base_spec.license_id,
             template=template,
             age_band=base_spec.age_band,
@@ -8844,7 +8965,9 @@ if clipboard.wait_is_text_available():
                     _('Generating activity...'))
         use_rag = (planner != 'direct'
                    and policy not in ('local', 'strict'))
-        validate_code = self._selected_options.get('validate', 'on') == 'on'
+        # Validation is always enabled.  It is part of the generation safety
+        # contract rather than a user-selectable prompt option.
+        validate_code = True
 
         self._detach_generation_job()
         # Keep the accepted parent revision while a refinement is running.
@@ -9583,10 +9706,38 @@ if clipboard.wait_is_text_available():
     _SIDEBAR_DEFAULT_WIDTH = 500
 
     def __inner_paned_size_allocate_cb(self, paned, alloc):
-        if self._inner_paned_initialised or alloc.width <= 1:
+        if alloc.width <= 1:
             return
+
+        first_allocation = not self._inner_paned_initialised
         self._inner_paned_initialised = True
-        paned.set_position(alloc.width - style.zoom(self._SIDEBAR_DEFAULT_WIDTH))
+        if id(paned) in self._paned_anim_ids:
+            return
+        if not self._sidebar_visible:
+            # A hidden stack child can first allocate at a narrow temporary
+            # width and grow once shown. Enforce the closed edge on every
+            # later allocation instead of remembering that temporary width.
+            self._set_pane_shrink(
+                paned, self._studio_right_panel, True)
+            if paned.get_position() != alloc.width:
+                paned.set_position(alloc.width)
+        elif first_allocation:
+            paned.set_position(
+                alloc.width - style.zoom(self._SIDEBAR_DEFAULT_WIDTH))
+
+    def _enforce_closed_sidebar_position(self):
+        if self._sidebar_visible or self._inner_paned is None:
+            return False
+        if self._studio_right_panel is not None:
+            self._studio_right_panel.set_no_show_all(True)
+            self._studio_right_panel.hide()
+        width = self._inner_paned.get_allocated_width()
+        if width > 1:
+            self._set_pane_shrink(
+                self._inner_paned, self._studio_right_panel, True)
+            if self._inner_paned.get_position() != width:
+                self._inner_paned.set_position(width)
+        return False
 
     def _sidebar_open_position(self):
         # Where the preview | sidebar divider sits when the sidebar is
@@ -9644,12 +9795,17 @@ if clipboard.wait_is_text_available():
         except Exception:
             pass
 
-    def _collapse_pane(self, paned, child, target):
+    def _collapse_pane(self, paned, child, target, hide_after=False):
         # Let this pane close past its content minimum for the slide,
         # then leave it tucked away. Manual drags keep shrink=False so
         # the content is never clipped.
         self._set_pane_shrink(paned, child, True)
-        self._animate_paned(paned, target)
+
+        def done():
+            if hide_after and child is not None:
+                child.hide()
+
+        self._animate_paned(paned, target, done if hide_after else None)
 
     def _expand_pane(self, paned, child, target):
         def done():
@@ -9704,14 +9860,20 @@ if clipboard.wait_is_text_available():
         if self._inner_paned is None:
             return
         if self._sidebar_visible:
+            if self._studio_right_panel is not None:
+                self._studio_right_panel.set_no_show_all(False)
+                self._studio_right_panel.show()
             self._expand_pane(
                 self._inner_paned, self._studio_right_panel,
                 self._sidebar_open_position())
         else:
             self._sidebar_saved_pos = self._inner_paned.get_position()
+            if self._studio_right_panel is not None:
+                self._studio_right_panel.set_no_show_all(True)
             self._collapse_pane(
                 self._inner_paned, self._studio_right_panel,
-                self._inner_paned.get_allocated_width())
+                self._inner_paned.get_allocated_width(),
+                hide_after=True)
 
     def __sidebar_reveal_done_cb(self, revealer, _param):
         self._refresh_preview_layout()

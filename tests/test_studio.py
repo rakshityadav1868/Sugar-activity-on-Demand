@@ -108,6 +108,13 @@ while Gtk.events_pending():
 
 assert panel._stack.get_visible_child_name() == 'home', \\
     panel._stack.get_visible_child_name()
+assert panel._sidebar_visible is False
+assert panel._sidebar_toggle_button.get_label() == '▶ Sidebar'
+assert panel._live_edit_enabled is False
+assert panel._live_edit_off_button.get_style_context().has_class(
+    'create-ai-live-toggle-active')
+assert not panel._live_edit_on_button.get_style_context().has_class(
+    'create-ai-live-toggle-active')
 
 panel.append_prompt_text('a fractions quiz for kids')
 panel.cancel_generation()
@@ -369,6 +376,7 @@ print('OFFSCREEN-GUIDED-OK')
 
 
 _OFFSCREEN_GUIDED_TRIGGER_SCRIPT = '''
+import threading
 import time
 
 import gi
@@ -406,7 +414,15 @@ QUESTIONS = [
      'options': ['A', 'B']},
     {'id': 'extra', 'label': 'Anything else?', 'type': 'text'},
 ]
-clarify.generate_questions = lambda provider, spec, timeout=90: QUESTIONS
+questions_release = threading.Event()
+
+
+def paused_questions(provider, spec, timeout=90):
+    questions_release.wait(2)
+    return QUESTIONS
+
+
+clarify.generate_questions = paused_questions
 
 window = Gtk.OffscreenWindow()
 window.set_default_size(1200, 900)
@@ -421,6 +437,16 @@ pump()
 # provider resolution failed).
 panel._resolve_active_provider = lambda: _FakeProvider()
 panel._begin_guided_generation('chess')
+pump()
+
+# Assert during the asynchronous thinking screen, before any question has
+# rendered. The old regression test only checked afterward and missed the
+# visible sidebar flash.
+assert panel._guided_running
+assert panel._sidebar_visible is False
+assert not panel._studio_right_panel.get_visible()
+
+questions_release.set()
 
 ok = False
 for _ in range(400):
@@ -434,6 +460,12 @@ for _ in range(400):
     time.sleep(0.01)
 
 assert ok, 'guided questions did not render after Send'
+assert panel._sidebar_visible is False
+assert not panel._studio_right_panel.get_visible()
+assert abs(panel._inner_paned.get_position() -
+           panel._inner_paned.get_allocated_width()) <= 1, (
+    panel._inner_paned.get_position(),
+    panel._inner_paned.get_allocated_width())
 
 # While the questionnaire is open the studio tabs are locked so the user
 # cannot navigate away from the questions mid-answer.
