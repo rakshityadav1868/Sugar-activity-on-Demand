@@ -60,9 +60,9 @@ def build_questions_system_prompt():
 def build_questions_user_prompt(spec):
     return (
         'Learner idea: %s\n'
-        'Learning category: %s\n'
+        'Selected learning areas: %s\n'
         'Age band: %s'
-        % (spec.prompt, spec.category, spec.age_band)
+        % (spec.prompt, ', '.join(spec.learning_categories()), spec.age_band)
     )
 
 
@@ -89,7 +89,8 @@ def build_plan_user_prompt(spec, answers_text, discussion=''):
     parts = [
         'Activity name: %s' % spec.name,
         'Learner idea: %s' % spec.prompt,
-        'Learning category: %s' % spec.category,
+        'Selected learning areas: %s' % ', '.join(
+            spec.learning_categories()),
         'Age band: %s' % spec.age_band,
     ]
     if answers_text:
