@@ -50,8 +50,8 @@ def build_enhance_user_prompt(prompt, spec=None):
     context = ''
     if spec is not None:
         context = (
-            '\nLearning category: %s\nAge band: %s'
-            % (spec.category, spec.age_band)
+            '\nSelected learning areas: %s\nAge band: %s'
+            % (', '.join(spec.learning_categories()), spec.age_band)
         )
     return 'Learner idea: %s%s' % (prompt, context)
 
