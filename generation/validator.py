@@ -73,7 +73,6 @@ FORBIDDEN_CALLS = {
     'locals',
 }
 
-
 @dataclass
 class ValidationReport:
     errors: list = field(default_factory=list)
@@ -357,7 +356,6 @@ def validate_activity_source_for_request(source, spec, plan=None):
         report.warnings.append(
             'Generated source contains little vocabulary from the request.'
         )
-
     return report
 
 

@@ -334,7 +334,6 @@ class TestAodValidator(unittest.TestCase):
             any('not Sugar-native' in error for error in report.errors),
             report.errors)
 
-
 _PLAIN_ACTIVITY_SOURCE = '''\
 # SPDX-License-Identifier: MIT
 
