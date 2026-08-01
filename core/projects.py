@@ -87,10 +87,16 @@ def build_spec_from_plan(plan):
     enough for restore_generation_result, which never validates the
     spec.
     """
+    categories = plan.get('categories', ()) or ()
+    if isinstance(categories, str):
+        categories = (categories,)
+    elif not isinstance(categories, (list, tuple)):
+        categories = ()
     return ActivitySpec(
         name=plan.get('name', ''),
         prompt=plan.get('summary') or plan.get('name', ''),
         category=plan.get('category', ''),
+        categories=tuple(categories),
         license_id=plan.get('license', 'MIT'),
         template=plan.get('template', 'auto'),
         age_band=plan.get('age_band', 'all'),
