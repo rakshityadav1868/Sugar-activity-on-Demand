@@ -8,8 +8,11 @@ from generation.rag import get_api_reference
 
 
 def build_system_prompt(spec, references=()):
-    learning_direction = _CATEGORY_BLOCKS.get(
-        spec.category, _CATEGORY_BLOCKS['creation'])
+    categories = spec.learning_categories()
+    learning_direction = '\n\n'.join(
+        _CATEGORY_BLOCKS.get(category, _CATEGORY_BLOCKS['creation'])
+        for category in categories
+    ) or _CATEGORY_BLOCKS['creation']
     if spec.template != 'auto':
         learning_direction = '%s\n%s' % (
             learning_direction,
@@ -39,7 +42,8 @@ def build_system_prompt(spec, references=()):
         '8. If the learner request contains a current activity.py excerpt, '
         'treat it as an iterative refinement: preserve the working activity '
         'and change only what the refinement asks for.\n'
-        '9. Respect the selected category, age band, and license.\n\n'
+        '9. Combine every selected learning area and respect the age band '
+        'and license.\n\n'
         '%s\n\n'
         'SELECTED LEARNING DIRECTION\n%s\n\n'
         'RETRIEVED SUGAR REFERENCES\n%s\n\n'

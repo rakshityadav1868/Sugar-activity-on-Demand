@@ -36,6 +36,15 @@ class TestAodPrompts(unittest.TestCase):
                 'Explore', 'Measure plant growth.', category, 'MIT')
             self.assertIn(expected, build_system_prompt(spec))
 
+    def test_system_prompt_combines_multiple_learning_areas(self):
+        spec = ActivitySpec(
+            'Eco Game', 'Build an ecosystem challenge.', 'science', 'MIT',
+            categories=('science', 'games'))
+        prompt = build_system_prompt(spec)
+        self.assertIn('experimenting', prompt)
+        self.assertIn('clear play loop', prompt)
+        self.assertIn('Combine every selected learning area', prompt)
+
     def test_system_prompt_falls_back_on_unknown_category(self):
         spec = ActivitySpec(
             'Explore', 'Measure plant growth.', 'mystery', 'MIT')
