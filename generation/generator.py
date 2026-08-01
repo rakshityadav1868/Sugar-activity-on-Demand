@@ -186,6 +186,7 @@ def build_plan(spec):
         'summary': _summary_from_prompt(spec.prompt),
         'template': template,
         'category': spec.category,
+        'categories': list(spec.learning_categories()),
         'age_band': spec.age_band,
         'learner_goal': learner_goal,
         'learner_steps': [
