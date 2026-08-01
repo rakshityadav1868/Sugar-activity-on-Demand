@@ -68,6 +68,24 @@ class ActivitySpec:
     age_band: str = 'all'
     learner_goal: str = ''
     code_size: str = 'standard'
+    categories: tuple = ()
+
+    def learning_categories(self):
+        """Return the ordered, unique learning areas selected by the user.
+
+        ``category`` remains the primary area for compatibility with older
+        projects and template-selection code.  ``categories`` carries the
+        complete multi-select choice.
+        """
+        selected = []
+        if self.category in CATEGORIES:
+            selected.append(self.category)
+        values = self.categories if isinstance(self.categories, (list, tuple)) \
+            else ()
+        for value in values:
+            if value in CATEGORIES and value not in selected:
+                selected.append(value)
+        return tuple(selected)
 
     def validate(self):
         errors = []
@@ -87,6 +105,14 @@ class ActivitySpec:
 
         if self.category not in CATEGORIES:
             errors.append('Unknown activity category: %s' % self.category)
+
+        if not isinstance(self.categories, (list, tuple)):
+            errors.append('Activity categories must be a list or tuple.')
+        else:
+            for category in self.categories:
+                if category not in CATEGORIES:
+                    errors.append(
+                        'Unknown activity category: %s' % category)
 
         if self.template not in TEMPLATES:
             errors.append('Unknown activity template: %s' % self.template)
@@ -116,11 +142,20 @@ class ActivitySpec:
             name = name[:80]
         prompt = self.prompt.strip() if isinstance(self.prompt, str) \
             else self.prompt
+        category = self.category if self.category in CATEGORIES \
+            else CATEGORY_FALLBACK
+        categories = []
+        if isinstance(self.categories, (list, tuple)):
+            for value in self.categories:
+                if value in CATEGORIES and value not in categories:
+                    categories.append(value)
+        if category in categories:
+            categories.remove(category)
+        categories.insert(0, category)
         return ActivitySpec(
             name=name,
             prompt=prompt,
-            category=self.category if self.category in CATEGORIES
-            else CATEGORY_FALLBACK,
+            category=category,
             license_id=self.license_id,
             template=self.template if self.template in TEMPLATES
             else 'auto',
@@ -128,6 +163,7 @@ class ActivitySpec:
             learner_goal=_normalize_spaces(self.learner_goal),
             code_size=self.code_size if self.code_size in CODE_SIZES
             else 'standard',
+            categories=tuple(categories),
         )
 
     def to_dict(self):
@@ -149,6 +185,8 @@ class ActivitySpec:
                 '— honor every one):\n%s' % requirements)
         lines.extend([
             'Learning category: %s' % self.category,
+            'Selected learning areas (combine all): %s' % ', '.join(
+                self.learning_categories()),
             'Template preference: %s' % self.template,
             'Age band: %s' % self.age_band,
             'Learner goal: %s' % goal,
@@ -161,6 +199,14 @@ class ActivitySpec:
         if not isinstance(data, dict):
             raise TypeError('Activity spec data must be a dictionary.')
 
+        categories = data.get('categories', ()) or ()
+        if isinstance(categories, str):
+            categories = (categories,)
+        elif isinstance(categories, (list, tuple)):
+            categories = tuple(categories)
+        else:
+            categories = ()
+
         return cls(
             name=data.get('name', ''),
             prompt=data.get('prompt', ''),
@@ -170,6 +216,7 @@ class ActivitySpec:
             age_band=data.get('age_band', 'all'),
             learner_goal=data.get('learner_goal', ''),
             code_size=data.get('code_size', 'standard'),
+            categories=categories,
         )
 
 

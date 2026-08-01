@@ -52,6 +52,34 @@ class TestActivitySpec(unittest.TestCase):
             )
             self.assertEqual([], spec.validate())
 
+    def test_multiple_learning_categories_round_trip_and_reach_prompt(self):
+        spec = ActivitySpec(
+            name='Science Challenge',
+            prompt='Build a game about ecosystems.',
+            category='science',
+            categories=('science', 'games'),
+            license_id='MIT',
+        )
+        self.assertEqual([], spec.validate())
+        self.assertEqual(('science', 'games'), spec.learning_categories())
+        self.assertEqual(
+            spec, ActivitySpec.from_dict(spec.to_dict()))
+        self.assertIn(
+            'Selected learning areas (combine all): science, games',
+            spec.to_prompt())
+
+    def test_normalized_learning_categories_are_unique_and_keep_primary(self):
+        spec = ActivitySpec(
+            name='Mixed Activity',
+            prompt='Build it.',
+            category='science',
+            categories=('games', 'science', 'games', 'unknown'),
+            license_id='MIT',
+        ).normalized()
+        self.assertEqual(('science', 'games'), spec.categories)
+        self.assertEqual(('science', 'games'), spec.learning_categories())
+        self.assertEqual([], spec.validate())
+
     def test_normalized_coerces_unknown_soft_fields(self):
         spec = ActivitySpec(
             name='X' * 120,
