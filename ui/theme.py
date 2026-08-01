@@ -1188,19 +1188,45 @@ _CSS_TEMPLATE = '''
                 color: %(inactive_stroke)s;
                 font-size: 12px;
             }
+            .create-ai-guided-count {
+                color: %(studio_cream_text)s;
+                background-color: %(studio_cream)s;
+                border: 1px solid %(studio_cream_border)s;
+                border-radius: 999px;
+                padding: 6px 12px;
+                font-size: 11px;
+                font-weight: 600;
+            }
+            .create-ai-guided-number {
+                color: %(accent_text)s;
+                background-color: %(accent_violet)s;
+                border-radius: 999px;
+                padding: 3px 8px;
+                min-width: 12px;
+                font-size: 11px;
+                font-weight: 700;
+            }
             .create-ai-guided-question {
                 color: %(toolbar)s;
-                font-size: 12px;
+                font-size: 13px;
+                font-weight: 600;
+            }
+            .create-ai-guided-type {
+                color: %(inactive_stroke)s;
+                background-color: %(studio_preview)s;
+                border: 1px solid %(studio_edge_soft)s;
+                border-radius: 999px;
+                padding: 3px 9px;
+                font-size: 10px;
                 font-weight: 600;
             }
             button.create-ai-guided-chip {
-                border-radius: 15px;
+                border-radius: 12px;
                 border: 1px solid %(studio_edge_soft)s;
                 background-image: none;
                 background-color: %(studio_preview)s;
-                color: %(toolbar)s;
-                padding: 5px 14px;
-                min-height: 0;
+                padding: 7px 14px;
+                min-height: 24px;
                 transition: background-color 120ms ease,
                             border-color 120ms ease;
             }
@@ -1215,6 +1241,7 @@ _CSS_TEMPLATE = '''
             button.create-ai-guided-chip-active {
                 background-color: %(violet_soft)s;
                 border-color: %(violet_soft_border)s;
+                box-shadow: 0 0 0 1px %(violet_soft_border)s;
             }
             button.create-ai-guided-chip-active label {
                 color: %(accent_violet)s;
@@ -1236,10 +1263,35 @@ _CSS_TEMPLATE = '''
                 background-color: %(studio_surface)s;
             }
             .create-ai-guided-card {
-                border-radius: 12px;
+                border-radius: 14px;
                 border: 1px solid %(studio_edge_soft)s;
                 background-color: %(studio_surface)s;
-                padding: 14px 16px;
+                padding: 16px 18px;
+                box-shadow: 0 1px 3px rgba(0, 0, 0, 0.035);
+            }
+            .create-ai-guided-footer {
+                border-top: 1px solid %(studio_edge_soft)s;
+                padding-top: 14px;
+            }
+            .create-ai-guided-footer-note {
+                color: %(inactive_stroke)s;
+                font-size: 11px;
+            }
+            button.create-ai-guided-skip {
+                border-radius: 10px;
+                border: 1px solid %(studio_edge)s;
+                background-image: none;
+                background-color: %(studio_surface)s;
+                padding: 7px 14px;
+                min-height: 24px;
+            }
+            button.create-ai-guided-skip label {
+                color: %(toolbar)s;
+                font-size: 11px;
+                font-weight: 600;
+            }
+            button.create-ai-guided-skip:hover {
+                background-color: %(studio_preview)s;
             }
         '''
 
