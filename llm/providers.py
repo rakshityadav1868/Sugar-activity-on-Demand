@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import base64
 import json
 import logging
 import os
@@ -13,6 +14,10 @@ import urllib.request
 from generation.prompts import extract_json_object
 from generation.codegen import extract_activity_source
 from generation.codegen import extract_activity_source_from_response
+from llm.reference import REFERENCE_ANALYSIS_SYSTEM_PROMPT
+from llm.reference import build_reference_analysis_prompt
+from llm.reference import format_reference_brief
+from llm.reference import sanitize_reference_error
 
 
 class ProviderError(Exception):
@@ -124,6 +129,14 @@ class LLMProvider:
             self.generate_plan(system_prompt, user_prompt, timeout=timeout)
         )
 
+    def supports_image_input(self):
+        return False
+
+    def analyze_reference_image(self, student_request, image_data,
+                                mime_type, timeout=_PROVIDER_PLAN_TIMEOUT):
+        raise ProviderError(
+            '%s does not support reference images.' % self.label)
+
 
 class GeminiProvider(LLMProvider):
     name = 'gemini'
@@ -166,6 +179,69 @@ class GeminiProvider(LLMProvider):
     def generate_plan(self, system_prompt, user_prompt,
                       timeout=_PROVIDER_PLAN_TIMEOUT):
         return self._generate_json(system_prompt, user_prompt, timeout)
+
+    def supports_image_input(self):
+        return True
+
+    def analyze_reference_image(self, student_request, image_data,
+                                mime_type, timeout=_PROVIDER_PLAN_TIMEOUT):
+        model = urllib.parse.quote(self.model, safe='')
+        key = urllib.parse.quote(self._api_key, safe='')
+        url = '%s/%s:generateContent?key=%s' % (
+            self._endpoint.rstrip('/'), model, key)
+        payload = {
+            'systemInstruction': {
+                'parts': [{'text': REFERENCE_ANALYSIS_SYSTEM_PROMPT}],
+            },
+            'contents': [{
+                'role': 'user',
+                'parts': [
+                    {'text': build_reference_analysis_prompt(
+                        student_request)},
+                    {'inlineData': {
+                        'mimeType': mime_type,
+                        'data': base64.b64encode(image_data).decode('ascii'),
+                    }},
+                ],
+            }],
+            'generationConfig': {
+                'temperature': 0.2,
+                'responseMimeType': 'application/json',
+                'maxOutputTokens': 2000,
+            },
+            'safetySettings': self._SAFETY_SETTINGS,
+        }
+        request = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode('utf-8'),
+            headers={'Content-Type': 'application/json'},
+            method='POST',
+        )
+        try:
+            with _urlopen_with_retry(
+                    request, timeout, 'Gemini') as response:
+                response_data = json.loads(response.read().decode('utf-8'))
+        except urllib.error.HTTPError as error:
+            raise ProviderError(
+                'Gemini image analysis failed with HTTP %d.' % error.code)
+        except (OSError, ValueError) as error:
+            raise ProviderError(
+                'Gemini image analysis failed: %s' %
+                sanitize_reference_error(error))
+        try:
+            candidate = response_data['candidates'][0]
+            finish_reason = candidate.get('finishReason', '')
+            if finish_reason and finish_reason != 'STOP':
+                raise ProviderError(
+                    'Gemini image analysis was blocked: %s' % finish_reason)
+            parts = candidate['content']['parts']
+            text = ''.join(part.get('text', '') for part in parts)
+        except (KeyError, IndexError, TypeError):
+            raise ProviderError(
+                'Gemini image analysis did not contain a result.')
+        if not text:
+            raise ProviderError('Gemini returned an empty image analysis.')
+        return format_reference_brief(extract_json_object(text))
 
     def generate_text(self, system_prompt, user_prompt,
                       timeout=_PROVIDER_CODEGEN_TIMEOUT,
@@ -411,6 +487,58 @@ class OpenAIProvider(LLMProvider):
     def generate_plan(self, system_prompt, user_prompt,
                       timeout=_PROVIDER_PLAN_TIMEOUT):
         return self._generate_json(system_prompt, user_prompt, timeout)
+
+    def supports_image_input(self):
+        return True
+
+    def analyze_reference_image(self, student_request, image_data,
+                                mime_type, timeout=_PROVIDER_PLAN_TIMEOUT):
+        image_url = 'data:%s;base64,%s' % (
+            mime_type,
+            base64.b64encode(image_data).decode('ascii'),
+        )
+        payload = {
+            'model': self.model,
+            'messages': [
+                {
+                    'role': 'system',
+                    'content': REFERENCE_ANALYSIS_SYSTEM_PROMPT,
+                },
+                {
+                    'role': 'user',
+                    'content': [
+                        {
+                            'type': 'text',
+                            'text': build_reference_analysis_prompt(
+                                student_request),
+                        },
+                        {
+                            'type': 'image_url',
+                            'image_url': {
+                                'url': image_url,
+                                'detail': 'high',
+                            },
+                        },
+                    ],
+                },
+            ],
+            'temperature': 0.2,
+            'response_format': {'type': 'json_object'},
+            'max_tokens': 2000,
+        }
+        response_data = _post_json(
+            self._endpoint,
+            payload,
+            self._request_headers(),
+            timeout,
+            '%s image analysis' % self._request_label(),
+            safe_error=True,
+        )
+        text = _chat_completion_message_text(
+            response_data,
+            '%s image analysis' % self._request_label(),
+        )
+        return format_reference_brief(extract_json_object(text))
 
     def generate_text(self, system_prompt, user_prompt,
                       timeout=_PROVIDER_CODEGEN_TIMEOUT,
@@ -687,6 +815,12 @@ class OpenAICompatibleProvider(OpenAIProvider):
             self._user_agent = 'OpenCode-AI-SDK/1.0'
         if not self._api_key:
             raise ProviderError('%s API key is not configured.' % self.label)
+
+    def supports_image_input(self):
+        # OpenRouter accepts OpenAI-style image_url content and routes it to
+        # multimodal models. Other compatible endpoints configured here are
+        # text-only contracts even if an individual model might differ.
+        return self._provider_name == 'openrouter'
 
     def _generation_temperature(self):
         if self._provider_name == 'opencode-go' and \
@@ -1246,7 +1380,7 @@ def _content_to_text(value):
     return ''
 
 
-def _post_json(url, payload, headers, timeout, label):
+def _post_json(url, payload, headers, timeout, label, safe_error=False):
     request = urllib.request.Request(
         url,
         data=json.dumps(payload).encode('utf-8'),
@@ -1257,6 +1391,9 @@ def _post_json(url, payload, headers, timeout, label):
         with _urlopen_with_retry(request, timeout, label) as response:
             response_data = json.loads(response.read().decode('utf-8'))
     except urllib.error.HTTPError as error:
+        if safe_error:
+            raise ProviderError(
+                '%s request failed with HTTP %d.' % (label, error.code))
         detail = error.read().decode('utf-8', errors='replace')[:500]
         raise ProviderError(
             '%s request failed with HTTP %d: %s'
@@ -1264,6 +1401,14 @@ def _post_json(url, payload, headers, timeout, label):
         )
     except (OSError, ValueError) as error:
         raise ProviderError('%s request failed: %s' % (label, error))
+    if safe_error and isinstance(response_data, dict) and \
+            response_data.get('error'):
+        raise ProviderError(
+            '%s request failed: %s' % (
+                label,
+                sanitize_reference_error(response_data.get('error')),
+            )
+        )
     _raise_response_error(response_data, label)
     return response_data
 

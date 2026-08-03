@@ -511,6 +511,35 @@ _CSS_TEMPLATE = '''
             .create-ai-plus label {
                 color: %(studio_lavender_text)s;
             }
+            button.create-ai-prompt-reference {
+                border-radius: 8px;
+                border: 1px solid #d4d4d4;
+                background-image: none;
+                background-color: #f5f5f5;
+                padding: 1px;
+                min-width: 32px;
+                min-height: 32px;
+            }
+            button.create-ai-prompt-reference:hover {
+                background-color: %(studio_lavender_soft)s;
+                border-color: %(studio_lavender_border)s;
+            }
+            button.create-ai-prompt-reference-clear {
+                border-radius: 999px;
+                border: 0;
+                background-image: none;
+                background-color: #dedede;
+                color: #333333;
+                padding: 0;
+                margin-left: -14px;
+                min-width: 19px;
+                min-height: 19px;
+                font-size: 13px;
+                font-weight: 700;
+            }
+            button.create-ai-prompt-reference-clear:hover {
+                background-color: #c8c8c8;
+            }
             .create-ai-send {
                 border-radius: 999px;
                 border: 1px solid %(toolbar)s;
@@ -611,6 +640,12 @@ _CSS_TEMPLATE = '''
             }
             .create-ai-chat-bubble-user label {
                 color: %(user_blue_text)s;
+            }
+            .create-ai-chat-reference {
+                border-radius: 9px;
+                border: 1px solid rgba(255, 255, 255, 0.72);
+                background-color: #ffffff;
+                padding: 3px;
             }
             .create-ai-chat-text {
                 color: %(toolbar)s;
@@ -1078,6 +1113,35 @@ _CSS_TEMPLATE = '''
             }
             button.create-ai-ask-plus:hover {
                 background-color: #3d3d3d;
+            }
+            button.create-ai-ask-reference {
+                border-radius: 7px;
+                border: 1px solid #4d4d4d;
+                background-image: none;
+                background-color: #353535;
+                padding: 1px;
+                min-width: 32px;
+                min-height: 32px;
+            }
+            button.create-ai-ask-reference:hover {
+                background-color: #484848;
+                border-color: #686868;
+            }
+            button.create-ai-ask-reference-clear {
+                border-radius: 999px;
+                border: 0;
+                background-image: none;
+                background-color: #4b4b4b;
+                color: #f2f2f2;
+                padding: 0;
+                margin-left: -14px;
+                min-width: 19px;
+                min-height: 19px;
+                font-size: 13px;
+                font-weight: 700;
+            }
+            button.create-ai-ask-reference-clear:hover {
+                background-color: #666666;
             }
             .create-ai-ask-target {
                 border-radius: 999px;

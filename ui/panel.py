@@ -140,6 +140,9 @@ class CreateAIActivityPanel(Gtk.EventBox):
         self._prompt_text = None
         self._prompt_char_label = None
         self._prompt_status_label = None
+        self._prompt_reference_button = None
+        self._prompt_reference_clear = None
+        self._prompt_send_button = None
         self._studio_prompt_labels = []
         self._preview_content_box = None
         self._last_preview_error = ''
@@ -235,6 +238,16 @@ class CreateAIActivityPanel(Gtk.EventBox):
         self._ask_bar_target_label = None
         self._ask_bar_status_label = None
         self._ask_bar_plus = None
+        self._ask_bar_reference_button = None
+        self._ask_bar_reference_clear = None
+        self._ask_bar_send_button = None
+        self._reference_image = None
+        self._reference_loading_running = False
+        self._reference_analysis_running = False
+        self._reference_analysis_serial = 0
+        self._reference_pending_sha = ''
+        self._reference_inflight_sha = ''
+        self._reference_inflight_job_id = ''
         self._ask_bar_edit_on = None
         self._ask_bar_edit_off = None
         self._chat_messages_box = None
@@ -328,6 +341,7 @@ class CreateAIActivityPanel(Gtk.EventBox):
 
     def reset_view(self):
         self.cancel_generation()
+        self._clear_reference_image()
         self._generation_result = None
         self._review_generation_context = {}
         self._review_draft_was_shown = False
@@ -725,6 +739,37 @@ class CreateAIActivityPanel(Gtk.EventBox):
         bottom_row.pack_start(hint_icon, False, False, 0)
         hint_icon.show()
 
+        prompt_reference = Gtk.Button()
+        self._prompt_reference_button = prompt_reference
+        prompt_reference.set_relief(Gtk.ReliefStyle.NONE)
+        prompt_reference.get_style_context().add_class(
+            'create-ai-prompt-reference')
+        prompt_reference.set_valign(Gtk.Align.CENTER)
+        prompt_reference.set_tooltip_text(
+            _('Add a PNG or JPEG as visual and layout guidance'))
+        prompt_reference.get_accessible().set_name(
+            _('Add reference image'))
+        prompt_reference.connect(
+            'clicked', self.__reference_image_clicked_cb)
+        bottom_row.pack_start(prompt_reference, False, False, 0)
+        prompt_reference.show()
+
+        prompt_reference_clear = Gtk.Button.new_with_label('×')
+        self._prompt_reference_clear = prompt_reference_clear
+        prompt_reference_clear.set_relief(Gtk.ReliefStyle.NONE)
+        prompt_reference_clear.get_style_context().add_class(
+            'create-ai-prompt-reference-clear')
+        prompt_reference_clear.set_valign(Gtk.Align.CENTER)
+        prompt_reference_clear.set_tooltip_text(_('Remove reference image'))
+        prompt_reference_clear.get_accessible().set_name(
+            _('Remove reference image'))
+        prompt_reference_clear.set_no_show_all(True)
+        prompt_reference_clear.connect(
+            'clicked', self.__reference_image_clear_cb)
+        bottom_row.pack_start(prompt_reference_clear, False, False, 0)
+        prompt_reference_clear.hide()
+        self._update_reference_image_ui()
+
         enhance_chip = Gtk.ToggleButton()
         enhance_chip.set_relief(Gtk.ReliefStyle.NONE)
         enhance_chip.get_style_context().add_class('create-ai-prompt-chip')
@@ -743,6 +788,7 @@ class CreateAIActivityPanel(Gtk.EventBox):
         enhance_chip.show()
 
         send_btn = Gtk.Button()
+        self._prompt_send_button = send_btn
         send_icon = Icon(icon_name='go-up',
                          pixel_size=style.SMALL_ICON_SIZE,
                          stroke_color=style.COLOR_WHITE.get_svg(),
@@ -1108,7 +1154,7 @@ class CreateAIActivityPanel(Gtk.EventBox):
             logging.exception('Could not resolve provider for guided flow')
             return None
 
-    def _guided_spec_for_prompt(self, prompt):
+    def _guided_spec_for_prompt(self, prompt, display_prompt=None):
         from core.spec import ActivitySpec
         from core.spec import name_from_prompt
 
@@ -1122,7 +1168,7 @@ class CreateAIActivityPanel(Gtk.EventBox):
             self._selected_options.get('age_band', 'all'), 'all')
         learning_areas = self._selected_learning_areas()
         return ActivitySpec(
-            name=name_from_prompt(prompt),
+            name=name_from_prompt(display_prompt or prompt),
             prompt=prompt,
             category=learning_areas[0],
             categories=tuple(learning_areas),
@@ -1261,14 +1307,15 @@ class CreateAIActivityPanel(Gtk.EventBox):
         widget.set_opacity(0.4 + 0.6 * wave)
         return GLib.SOURCE_CONTINUE
 
-    def _begin_guided_generation(self, prompt):
+    def _begin_guided_generation(self, prompt, display_prompt=None):
         if self._guided_running:
             return
+        display_prompt = display_prompt or prompt
         try:
             provider = self._resolve_active_provider()
             spec = None
             if provider is not None:
-                spec = self._guided_spec_for_prompt(prompt)
+                spec = self._guided_spec_for_prompt(prompt, display_prompt)
         except Exception:
             logging.exception(
                 'Guided generation setup failed; using direct flow')
@@ -1278,10 +1325,15 @@ class CreateAIActivityPanel(Gtk.EventBox):
             # the direct one-shot flow so local-template generation works.
             logging.warning(
                 'Guided flow skipped (no AI provider); direct generation')
-            self._submit_generation_from_prompt(prompt, chat_prompt=prompt)
+            self._submit_generation_from_prompt(
+                prompt,
+                chat_prompt=display_prompt,
+                display_prompt=display_prompt,
+            )
             return
         self._guided_state = {
             'prompt': prompt,
+            'display_prompt': display_prompt,
             'spec': spec,
             'provider': provider,
             'questions': [],
@@ -1316,9 +1368,14 @@ class CreateAIActivityPanel(Gtk.EventBox):
         except Exception:
             logging.exception('Guided questions render failed; building')
             prompt = state.get('prompt', '')
+            display_prompt = state.get('display_prompt', prompt)
             self._guided_state = None
             self._set_studio_tabs_locked(False)
-            self._submit_generation_from_prompt(prompt, chat_prompt=prompt)
+            self._submit_generation_from_prompt(
+                prompt,
+                chat_prompt=display_prompt,
+                display_prompt=display_prompt,
+            )
         return False
 
     def _show_questions_page(self, questions):
@@ -1341,7 +1398,7 @@ class CreateAIActivityPanel(Gtk.EventBox):
 
         subtitle = Gtk.Label(
             _('A few choices help tailor “%s” to what you want to make.')
-            % state['prompt'])
+            % state.get('display_prompt', state['prompt']))
         subtitle.set_halign(Gtk.Align.START)
         subtitle.set_line_wrap(True)
         subtitle.set_max_width_chars(90)
@@ -1820,11 +1877,15 @@ class CreateAIActivityPanel(Gtk.EventBox):
             state['prompt'],
             state.get('answers_text', ''),
             state.get('plan_text', ''))
-        original = state['prompt']
+        original = state.get('display_prompt', state['prompt'])
         self._guided_state = None
         self._guided_running = False
         self._set_studio_tabs_locked(False)
-        self._submit_generation_from_prompt(enriched, chat_prompt=original)
+        self._submit_generation_from_prompt(
+            enriched,
+            chat_prompt=original,
+            display_prompt=original,
+        )
 
     def _create_section_label(self, text):
         label = Gtk.Label(text)
@@ -2266,12 +2327,14 @@ class CreateAIActivityPanel(Gtk.EventBox):
         panel.show()
         return panel
 
-    def _append_chat_message(self, text, from_user=False, scroll=True):
+    def _append_chat_message(self, text, from_user=False, scroll=True,
+                             reference=None):
         if self._chat_messages_box is None:
             return
 
         if from_user:
-            self._add_chat_bubble(text, from_user=True, scroll=scroll)
+            self._add_chat_bubble(
+                text, from_user=True, scroll=scroll, reference=reference)
             return
 
         self._post_ai_reply(
@@ -2763,7 +2826,7 @@ class CreateAIActivityPanel(Gtk.EventBox):
 
     def _add_chat_bubble(self, text, from_user=False, scroll=True,
                          stream=False, on_done=None, box=None,
-                         scroll_cb=None, max_chars=40):
+                         scroll_cb=None, max_chars=40, reference=None):
         if box is None:
             box = self._chat_messages_box
         if box is None:
@@ -2789,8 +2852,35 @@ class CreateAIActivityPanel(Gtk.EventBox):
         label.set_margin_bottom(style.zoom(5))
         label.set_margin_start(style.zoom(10))
         label.set_margin_end(style.zoom(10))
-        bubble.add(label)
-        label.show()
+        if reference is None:
+            bubble.add(label)
+            label.show()
+        else:
+            content = Gtk.VBox(spacing=style.zoom(2))
+            bubble.add(content)
+            content.show()
+            try:
+                from ui.reference_image import reference_thumbnail
+                thumbnail = reference_thumbnail(
+                    reference, style.zoom(180))
+                image_frame = Gtk.EventBox()
+                image_frame.get_style_context().add_class(
+                    'create-ai-chat-reference')
+                image_frame.set_margin_top(style.zoom(8))
+                image_frame.set_margin_start(style.zoom(8))
+                image_frame.set_margin_end(style.zoom(8))
+                image = Gtk.Image.new_from_pixbuf(thumbnail)
+                image.set_tooltip_text(
+                    _('Reference: %s') % reference.source_name)
+                image_frame.add(image)
+                content.pack_start(image_frame, False, False, 0)
+                image.show()
+                image_frame.show()
+            except Exception:
+                logging.exception(
+                    'Could not show the chat reference thumbnail')
+            content.pack_start(label, False, False, 0)
+            label.show()
         bubble.show()
 
         if from_user:
@@ -4582,8 +4672,38 @@ class CreateAIActivityPanel(Gtk.EventBox):
         entry.set_has_frame(False)
         entry.get_style_context().add_class('create-ai-ask-entry')
         entry.connect('activate', self.__ask_bar_send_cb)
+        entry.connect('key-press-event',
+                      self.__ask_bar_key_press_event_cb)
         row.pack_start(entry, True, True, 0)
         entry.show()
+
+        reference = Gtk.Button()
+        self._ask_bar_reference_button = reference
+        reference.set_relief(Gtk.ReliefStyle.NONE)
+        reference.get_style_context().add_class(
+            'create-ai-ask-reference')
+        reference.set_valign(Gtk.Align.CENTER)
+        reference.set_tooltip_text(
+            _('Add a PNG or JPEG as visual and layout guidance'))
+        reference.get_accessible().set_name(_('Add reference image'))
+        reference.connect('clicked', self.__reference_image_clicked_cb)
+        row.pack_start(reference, False, False, 0)
+        reference.show()
+
+        clear_reference = Gtk.Button.new_with_label('×')
+        self._ask_bar_reference_clear = clear_reference
+        clear_reference.set_relief(Gtk.ReliefStyle.NONE)
+        clear_reference.get_style_context().add_class(
+            'create-ai-ask-reference-clear')
+        clear_reference.set_valign(Gtk.Align.CENTER)
+        clear_reference.set_tooltip_text(_('Remove reference image'))
+        clear_reference.get_accessible().set_name(_('Remove reference image'))
+        clear_reference.set_no_show_all(True)
+        clear_reference.connect(
+            'clicked', self.__reference_image_clear_cb)
+        row.pack_start(clear_reference, False, False, 0)
+        clear_reference.hide()
+        self._update_reference_image_ui()
 
         status = Gtk.Label('')
         self._ask_bar_status_label = status
@@ -4595,6 +4715,7 @@ class CreateAIActivityPanel(Gtk.EventBox):
         status.show()
 
         send = Gtk.Button()
+        self._ask_bar_send_button = send
         send_icon = Icon(icon_name='go-up',
                          pixel_size=style.SMALL_ICON_SIZE,
                          stroke_color=style.COLOR_WHITE.get_svg(),
@@ -4616,20 +4737,255 @@ class CreateAIActivityPanel(Gtk.EventBox):
             self._live_edit_status_label.set_text(text)
         if self._ask_bar_status_label is not None:
             self._ask_bar_status_label.set_text(text)
+            self._ask_bar_status_label.set_tooltip_text(text or None)
+
+    def _set_reference_status(self, text):
+        self._set_live_edit_status(text)
+        if self._prompt_status_label is not None:
+            self._prompt_status_label.set_text(text)
 
     def __ask_bar_reset_target_cb(self, button):
         self._set_live_edit_target(_('activity canvas'))
         if self._ask_bar_entry is not None:
             self._ask_bar_entry.grab_focus()
 
+    def __ask_bar_key_press_event_cb(self, entry, event):
+        modifiers = Gtk.accelerator_get_default_mod_mask()
+        state = event.state & modifiers
+        ctrl = state & Gdk.ModifierType.CONTROL_MASK
+        shift = state & Gdk.ModifierType.SHIFT_MASK
+        paste_key = ctrl and event.keyval in (Gdk.KEY_v, Gdk.KEY_V)
+        paste_key = paste_key or (
+            shift and event.keyval == Gdk.KEY_Insert)
+        if paste_key:
+            return self._paste_reference_image_from_clipboard()
+        return False
+
+    def _paste_reference_image_from_clipboard(self):
+        clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
+        try:
+            has_image = clipboard.wait_is_image_available()
+        except Exception:
+            has_image = False
+        if not has_image:
+            return False
+        if self._reference_loading_running or self._reference_analysis_running:
+            self._set_reference_status(
+                _('Wait for the current reference image to finish.'))
+            return True
+
+        self._reference_analysis_serial += 1
+        serial = self._reference_analysis_serial
+        self._reference_loading_running = True
+        self._update_reference_image_ui()
+        self._set_reference_status(_('Preparing the pasted image...'))
+        clipboard.request_image(
+            self.__reference_clipboard_image_received_cb, serial)
+        return True
+
+    def __reference_clipboard_image_received_cb(
+            self, clipboard, pixbuf, serial):
+        if serial != self._reference_analysis_serial:
+            return
+        if pixbuf is None:
+            self._reference_image_loaded_cb(
+                serial, None, _('Could not read the pasted image.'))
+            return
+
+        def worker():
+            try:
+                from ui.reference_image import normalize_reference_pixbuf
+                reference = normalize_reference_pixbuf(pixbuf)
+                error_text = ''
+            except Exception as error:
+                from llm.reference import sanitize_reference_error
+                reference = None
+                error_text = sanitize_reference_error(error)
+            GObject.idle_add(
+                self._reference_image_loaded_cb,
+                serial, reference, error_text)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def __reference_image_clicked_cb(self, button):
+        if self._reference_loading_running or self._reference_analysis_running:
+            return
+        dialog = Gtk.FileChooserDialog(
+            title=_('Add a reference image'),
+            parent=self.get_toplevel(),
+            action=Gtk.FileChooserAction.OPEN,
+        )
+        dialog.add_buttons(
+            _('Cancel'), Gtk.ResponseType.CANCEL,
+            _('Use Image'), Gtk.ResponseType.ACCEPT,
+        )
+        image_filter = Gtk.FileFilter()
+        image_filter.set_name(_('PNG and JPEG images'))
+        image_filter.add_mime_type('image/png')
+        image_filter.add_mime_type('image/jpeg')
+        image_filter.add_pattern('*.png')
+        image_filter.add_pattern('*.jpg')
+        image_filter.add_pattern('*.jpeg')
+        dialog.add_filter(image_filter)
+        privacy_note = Gtk.Label(
+            _('A normalized copy is sent to a configured vision-capable AI '
+              'provider for analysis. The image itself is not saved in '
+              'activity history, the generated project, or the XO bundle. '
+              'A short text description of its layout may be saved with '
+              'the activity request.'))
+        privacy_note.set_line_wrap(True)
+        privacy_note.set_xalign(0)
+        privacy_note.set_margin_start(style.zoom(12))
+        privacy_note.set_margin_end(style.zoom(12))
+        privacy_note.set_margin_top(style.zoom(8))
+        privacy_note.set_margin_bottom(style.zoom(8))
+        privacy_note.show()
+        dialog.set_extra_widget(privacy_note)
+        response = dialog.run()
+        filename = dialog.get_filename()
+        dialog.destroy()
+        if response != Gtk.ResponseType.ACCEPT or not filename:
+            return
+        self._reference_analysis_serial += 1
+        serial = self._reference_analysis_serial
+        self._reference_loading_running = True
+        self._update_reference_image_ui()
+        self._set_reference_status(_('Preparing the reference image...'))
+
+        def worker():
+            try:
+                from ui.reference_image import normalize_reference_image
+                reference = normalize_reference_image(filename)
+                error_text = ''
+            except Exception as error:
+                from llm.reference import sanitize_reference_error
+                reference = None
+                error_text = sanitize_reference_error(error)
+            GObject.idle_add(
+                self._reference_image_loaded_cb,
+                serial, reference, error_text)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _reference_image_loaded_cb(self, serial, reference, error_text):
+        if serial != self._reference_analysis_serial:
+            return False
+        self._reference_loading_running = False
+        if error_text or reference is None:
+            logging.warning('Reference image was rejected: %s', error_text)
+            self._update_reference_image_ui()
+            self._set_reference_status(error_text)
+            return False
+        self._reference_image = reference
+        self._reference_pending_sha = ''
+        self._reference_inflight_sha = ''
+        self._reference_inflight_job_id = ''
+        self._update_reference_image_ui()
+        self._set_reference_status(
+            _('Reference ready — add an instruction or press Send.'))
+        if self._stack.get_visible_child_name() == 'create' and \
+                self._prompt_text is not None:
+            self._prompt_text.grab_focus()
+        elif self._ask_bar_entry is not None:
+            self._ask_bar_entry.grab_focus()
+        return False
+
+    def __reference_image_clear_cb(self, button):
+        if self._reference_loading_running or self._reference_analysis_running:
+            return
+        self._clear_reference_image()
+        self._set_reference_status(_('Reference image removed.'))
+
+    def _clear_reference_image(self):
+        self._reference_analysis_serial += 1
+        self._reference_image = None
+        self._reference_loading_running = False
+        self._reference_pending_sha = ''
+        self._reference_inflight_sha = ''
+        self._reference_inflight_job_id = ''
+        self._reference_analysis_running = False
+        self._update_reference_image_ui()
+
+    def _update_reference_image_ui(self):
+        busy = self._reference_loading_running or \
+            self._reference_analysis_running
+        buttons = (
+            self._prompt_reference_button,
+            self._ask_bar_reference_button,
+        )
+        clear_buttons = (
+            self._prompt_reference_clear,
+            self._ask_bar_reference_clear,
+        )
+        thumbnail = None
+        if self._reference_image is not None:
+            try:
+                from ui.reference_image import reference_thumbnail
+                thumbnail = reference_thumbnail(
+                    self._reference_image, style.zoom(28))
+            except Exception:
+                logging.exception('Could not show reference thumbnail')
+        for button in buttons:
+            if button is None:
+                continue
+            if thumbnail is None:
+                icon_color = '#555555' \
+                    if button is self._prompt_reference_button \
+                    else '#d8d8d8'
+                icon = Icon(
+                    icon_name='insert-image',
+                    pixel_size=style.SMALL_ICON_SIZE,
+                    stroke_color=icon_color,
+                    fill_color=icon_color,
+                )
+                icon.show()
+                button.set_image(icon)
+                button.set_tooltip_text(
+                    _('Add a PNG or JPEG as visual and layout guidance'))
+            else:
+                image = Gtk.Image.new_from_pixbuf(thumbnail)
+                image.show()
+                button.set_image(image)
+                button.set_tooltip_text(
+                    _('Reference: %s') % self._reference_image.source_name)
+            button.set_sensitive(not busy)
+        for clear_button in clear_buttons:
+            if clear_button is None:
+                continue
+            if self._reference_image is None:
+                clear_button.hide()
+            else:
+                clear_button.show()
+            clear_button.set_sensitive(not busy)
+        for send_button in (
+                self._prompt_send_button, self._ask_bar_send_button):
+            if send_button is not None:
+                send_button.set_sensitive(not busy)
+
     def __ask_bar_send_cb(self, widget):
         if self._ask_bar_entry is None:
             return
 
         text = self._ask_bar_entry.get_text().strip()
-        if not text:
+        if self._reference_loading_running:
+            self._set_reference_status(
+                _('Wait for the reference image to finish preparing.'))
+            return
+        reference = self._reference_image
+        if not text and reference is None:
             self._ask_bar_entry.grab_focus()
             self._set_live_edit_status(_('Describe the change first.'))
+            return
+
+        if reference is not None:
+            if not text and self._generation_result is None:
+                self._ask_bar_entry.grab_focus()
+                self._set_live_edit_status(
+                    _('Add what learners should learn before sending this '
+                      'reference.'))
+                return
+            source = 'preview' if self._live_edit_enabled else 'chat'
+            self._begin_reference_image_refinement(text, source)
             return
 
         self._ask_bar_entry.set_text('')
@@ -4643,6 +4999,129 @@ class CreateAIActivityPanel(Gtk.EventBox):
             # this starts a fresh generation from the prompt.
             self._set_live_edit_status(_('Refining...'))
             self._submit_refinement_from_prompt(text, source='chat')
+
+    def _begin_reference_image_refinement(self, text, source):
+        if self._reference_loading_running or \
+                self._reference_analysis_running or \
+                self._reference_image is None:
+            return
+        if self._has_active_generation_job():
+            self._set_live_edit_status(
+                _('Wait for the current generation to finish.'))
+            return
+
+        from service.service import get_service
+
+        service = get_service()
+        provider_name = self._resolve_generation_provider_name(service)
+        selected_provider = self._selected_options['provider']
+        if provider_name == selected_provider and provider_name in (
+                'gemini', 'openai', 'openrouter'):
+            if not self._configure_selected_provider(persist=True):
+                return
+        provider_name, provider = self._resolve_reference_image_provider(
+            service, provider_name)
+        if provider is None:
+            message = _(
+                'Reference images need Gemini, OpenAI, or a '
+                'vision-capable OpenRouter model.')
+            self._set_reference_status(message)
+            if source != 'create':
+                self._append_chat_status(message)
+            return
+
+        reference = self._reference_image
+        serial = self._reference_analysis_serial
+        self._reference_analysis_running = True
+        self._update_reference_image_ui()
+        self._set_reference_status(
+            _('Reading the reference with %s...') % provider.label)
+
+        def worker():
+            try:
+                brief = provider.analyze_reference_image(
+                    text, reference.data, reference.mime_type)
+                error_text = ''
+            except Exception as error:
+                from llm.reference import sanitize_reference_error
+                brief = ''
+                error_text = sanitize_reference_error(error)
+                logging.warning(
+                    'Reference image analysis failed: %s', error_text)
+            GObject.idle_add(
+                self._reference_image_analysis_finished_cb,
+                serial, reference.sha256, text, source, brief, error_text)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _resolve_reference_image_provider(self, service, provider_name):
+        """Resolve a vision provider, with capability fallback for Auto."""
+        candidates = [provider_name]
+        local_policy = self._selected_options.get('policy') in (
+            'local', 'strict') or \
+            self._selected_options.get('planner') == 'validate'
+        if self._selected_options.get('provider') == 'default' and \
+                not local_policy:
+            for candidate in ('gemini', 'openrouter', 'openai'):
+                if candidate not in candidates:
+                    candidates.append(candidate)
+        for candidate in candidates:
+            try:
+                provider = service.resolve_provider(candidate)
+            except Exception as error:
+                from llm.reference import sanitize_reference_error
+                logging.warning(
+                    'Could not resolve reference image provider %s: %s',
+                    candidate,
+                    sanitize_reference_error(error),
+                )
+                continue
+            supports_images = getattr(
+                provider, 'supports_image_input', lambda: False)
+            if provider is not None and supports_images():
+                return candidate, provider
+        return provider_name, None
+
+    def _reference_image_analysis_finished_cb(
+            self, serial, image_sha, text, source, brief, error_text):
+        reference = self._reference_image
+        if serial != self._reference_analysis_serial or \
+                reference is None or reference.sha256 != image_sha:
+            return False
+        self._reference_analysis_running = False
+        self._update_reference_image_ui()
+        if error_text:
+            self._set_reference_status(
+                _('Could not read the reference; it is still attached.'))
+            self._append_chat_status(
+                _('Reference image analysis failed: %s') %
+                self._short_provider_status(error_text))
+            return False
+
+        from llm.reference import combine_request_with_reference
+
+        backend_request = combine_request_with_reference(text, brief)
+        display_request = (
+            _('%s (with reference image)') % text
+            if text else _('Use the attached reference image')
+        )
+        self._reference_pending_sha = image_sha
+        if source == 'create':
+            self._set_reference_status(_('Reference understood.'))
+            self._begin_guided_generation(
+                backend_request,
+                display_prompt=text,
+            )
+            return False
+        if self._ask_bar_entry is not None:
+            self._ask_bar_entry.set_text('')
+        self._set_reference_status(_('Applying the reference...'))
+        self._submit_refinement_from_prompt(
+            backend_request,
+            source=source,
+            display_refinement=display_request,
+        )
+        return False
 
     def _create_learning_sidebar(self):
         panel = Gtk.EventBox()
@@ -4858,7 +5337,8 @@ class CreateAIActivityPanel(Gtk.EventBox):
         card.show()
         return card
 
-    def _append_sidebar_message(self, text, from_user=False, scroll=True):
+    def _append_sidebar_message(self, text, from_user=False, scroll=True,
+                                reference=None):
         # The sidebar conversation now uses the same living treatment as the
         # main chat: bubbles drift in, the AI's reply beats a typing
         # indicator and then streams in word-chunks.
@@ -4869,7 +5349,7 @@ class CreateAIActivityPanel(Gtk.EventBox):
                 text, from_user=True, scroll=scroll,
                 box=self._sidebar_messages_box,
                 scroll_cb=self.__scroll_sidebar_chat_to_bottom,
-                max_chars=32)
+                max_chars=32, reference=reference)
             return
         self._post_ai_reply(
             self._sidebar_messages_box,
@@ -5267,10 +5747,11 @@ class CreateAIActivityPanel(Gtk.EventBox):
         GObject.idle_add(self.__focus_prompt_text)
 
     def _set_studio_prompt(self, prompt):
-        prompt = prompt.strip()
-        if not prompt:
-            prompt = _('learning activity')
+        full_prompt = prompt.strip()
+        if not full_prompt:
+            full_prompt = _('learning activity')
 
+        prompt = full_prompt
         if len(prompt) > 36:
             prompt = prompt[:33] + '...'
         for label in self._studio_prompt_labels:
@@ -8704,6 +9185,9 @@ if clipboard.wait_is_text_available():
         if self._prompt_text is None:
             return False
 
+        if self._paste_reference_image_from_clipboard():
+            return True
+
         self._clear_prompt_placeholder()
         self._prompt_text.grab_focus()
         Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).request_text(
@@ -8750,9 +9234,19 @@ if clipboard.wait_is_text_available():
                 self._prompt_status_label.set_text(_('Need prompt'))
             return
 
+        if self._reference_loading_running:
+            self._set_reference_status(
+                _('Wait for the reference image to finish preparing.'))
+            return
+
+        if self._reference_image is not None:
+            self._begin_reference_image_refinement(prompt, 'create')
+            return
+
         self._begin_guided_generation(prompt)
 
-    def _submit_generation_from_prompt(self, prompt, chat_prompt=None):
+    def _submit_generation_from_prompt(self, prompt, chat_prompt=None,
+                                       display_prompt=None):
         from core.spec import ActivitySpec
         from core.spec import name_from_prompt
 
@@ -8787,22 +9281,25 @@ if clipboard.wait_is_text_available():
         self._submit_generation_spec(
             spec,
             chat_prompt=chat_prompt or prompt,
-            display_prompt=prompt,
+            display_prompt=display_prompt or prompt,
             is_refinement=False,
         )
 
-    def _submit_refinement_from_prompt(self, refinement, source='chat'):
+    def _submit_refinement_from_prompt(self, refinement, source='chat',
+                                       display_refinement=None):
         if self._generation_result is None:
             self._submit_generation_from_prompt(
                 refinement,
-                chat_prompt=refinement,
+                chat_prompt=display_refinement or refinement,
+                display_prompt=display_refinement or refinement,
             )
             return
 
         target = self._live_edit_target or _('activity canvas')
         backend_refinement = refinement
-        display_refinement = refinement
+        display_refinement = display_refinement or refinement
         if source == 'preview':
+            shown_refinement = display_refinement
             target_note = self._preview_target_note()
             backend_refinement = (
                 '%(note)s Keep the rest of the activity working '
@@ -8816,7 +9313,7 @@ if clipboard.wait_is_text_available():
             }
             display_refinement = _('%(target)s: %(change)s') % {
                 'target': target,
-                'change': refinement,
+                'change': shown_refinement,
             }
         if source == 'preview':
             self._set_live_edit_status(_('Refining preview...'))
@@ -8923,16 +9420,27 @@ if clipboard.wait_is_text_available():
         )
 
     def _limit_refinement_prompt(self, prompt):
-        if len(prompt) <= 18000:
+        from core.spec import MAX_PROMPT_LENGTH
+
+        if len(prompt) <= MAX_PROMPT_LENGTH:
             return prompt
-        keep_head = prompt[:8800].rstrip()
-        keep_tail = prompt[-8800:].lstrip()
-        return '%s\n\n[Previous context shortened]\n\n%s' % (
-            keep_head, keep_tail)
+        marker = '\n\n[Previous context shortened]\n\n'
+        available = MAX_PROMPT_LENGTH - len(marker)
+        head_size = available // 2
+        tail_size = available - head_size
+        keep_head = prompt[:head_size].rstrip()
+        keep_tail = prompt[-tail_size:].lstrip()
+        limited = '%s%s%s' % (keep_head, marker, keep_tail)
+        return limited[:MAX_PROMPT_LENGTH]
 
     def _submit_generation_spec(self, spec, chat_prompt=None,
                                 display_prompt=None,
                                 is_refinement=False):
+        reference_sha = self._reference_pending_sha
+        reference_for_message = None
+        if reference_sha and self._reference_image is not None and \
+                self._reference_image.sha256 == reference_sha:
+            reference_for_message = self._reference_image
         if self._has_active_generation_job():
             if self._prompt_status_label is not None:
                 self._prompt_status_label.set_text(_('Already generating'))
@@ -8942,6 +9450,7 @@ if clipboard.wait_is_text_available():
             self._append_chat_message(
                 _('Please wait for the current activity generation to finish.'))
             return
+        self._reference_pending_sha = ''
 
         from service.service import get_service
 
@@ -8953,7 +9462,7 @@ if clipboard.wait_is_text_available():
         selected_provider = self._selected_options['provider']
         if provider_name == selected_provider and provider_name in (
                 'freemodel', 'gemini', 'openai', 'deepseek', 'qwen', 'moonshot',
-                'opencode', 'opencode-go', 'claude', 'ollama'):
+                'openrouter', 'opencode', 'opencode-go', 'claude', 'ollama'):
             if not self._configure_selected_provider(persist=True):
                 return
 
@@ -8981,16 +9490,15 @@ if clipboard.wait_is_text_available():
             self._aod_original_prompt = spec.prompt
         if display_prompt is None:
             display_prompt = spec.prompt
-        if is_refinement:
-            self._set_prompt_text(display_prompt)
-        else:
-            self._set_prompt_text(spec.prompt)
+        self._set_prompt_text(display_prompt)
         self._set_studio_prompt(display_prompt)
         self._update_preview_license_summary()
         self._append_chat_message(chat_prompt or display_prompt,
-                                  from_user=True)
+                                  from_user=True,
+                                  reference=reference_for_message)
         self._append_sidebar_message(chat_prompt or display_prompt,
-                                     from_user=True)
+                                     from_user=True,
+                                     reference=reference_for_message)
         if is_refinement:
             self._append_chat_status(_('Refining selected activity'))
             self._append_sidebar_status(_('Refining selected activity'))
@@ -9067,6 +9575,10 @@ if clipboard.wait_is_text_available():
             return
 
         self._generation_job_id = job.job_id
+        if reference_sha and self._reference_image is not None and \
+                self._reference_image.sha256 == reference_sha:
+            self._reference_inflight_sha = reference_sha
+            self._reference_inflight_job_id = job.job_id
         self._aod_session_id = job.session_id
         self._set_chat_entry_sensitive(False)
         service.watch(job.job_id, self._generation_job_callback)
@@ -9111,7 +9623,7 @@ if clipboard.wait_is_text_available():
                 self._aod_session_id = job.session_id
                 self._aod_active_revision_id = job.result_summary.get(
                     'revision_id', '')
-                self._generation_finished_cb(job.result)
+                self._generation_finished_cb(job.result, job_id=job.job_id)
             return False
 
         if job.status == STATUS_FAILED:
@@ -9282,11 +9794,13 @@ if clipboard.wait_is_text_available():
                   '%(percent)d%%') % {'percent': percent}
             )
 
-    def _generation_finished_cb(self, result):
-        self._apply_generation_result(result, announce=True)
+    def _generation_finished_cb(self, result, job_id=None):
+        self._apply_generation_result(
+            result, announce=True, completed_job_id=job_id)
         return False
 
-    def _apply_generation_result(self, result, announce=True):
+    def _apply_generation_result(self, result, announce=True,
+                                 completed_job_id=None):
         """Show a finished (or reopened) result in the studio.
 
         announce=False reuses the same wiring for reopening an existing
@@ -9352,7 +9866,18 @@ if clipboard.wait_is_text_available():
             if isinstance(prev_files, dict):
                 previous_source = prev_files.get('activity.py', '') or ''
         self._update_sidebar_learning(result, plan, previous_source)
+        if announce:
+            self._clear_reference_for_completed_job(completed_job_id)
         return False
+
+    def _clear_reference_for_completed_job(self, completed_job_id):
+        if not completed_job_id or \
+                completed_job_id != self._reference_inflight_job_id or \
+                self._reference_image is None or \
+                self._reference_image.sha256 != self._reference_inflight_sha:
+            return False
+        self._clear_reference_image()
+        return True
 
     # Sparky speaks with a little variety so it never feels canned.
     _OPENERS = (
@@ -9552,7 +10077,13 @@ if clipboard.wait_is_text_available():
         return text[:137].rstrip() + '...'
 
     def _generation_failed_cb(self, error_text, job=None):
+        failed_job_id = getattr(job, 'job_id', '') if job is not None \
+            else self._generation_job_id
         self._detach_generation_job()
+        if failed_job_id and failed_job_id == \
+                self._reference_inflight_job_id:
+            self._reference_inflight_job_id = ''
+            self._reference_inflight_sha = ''
         self._fail_generation_steps()
         display_error = _clean_generation_error_text(error_text)
         draft_source = ''

@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import base64
 import json
 import os
 import unittest
@@ -269,6 +270,41 @@ class TestAodLLMProviders(unittest.TestCase):
 
         self.assertIn('blocked', str(context.exception))
 
+    def test_gemini_reference_image_uses_inline_data(self):
+        provider = GeminiProvider(api_key='test-key')
+        response = mock.Mock()
+        response.__enter__ = mock.Mock(return_value=response)
+        response.__exit__ = mock.Mock(return_value=False)
+        response.read.return_value = json.dumps({
+            'candidates': [{
+                'content': {'parts': [{'text': json.dumps({
+                    'summary': 'A colorful two-column game',
+                    'layout': ['score on the left', 'board on the right'],
+                    'visual_style': ['rounded cards'],
+                    'controls': ['large play button'],
+                    'visible_text': [],
+                    'behavior_notes': ['play starts the round'],
+                    'uncertainties': [],
+                })}]},
+                'finishReason': 'STOP',
+            }],
+        }).encode('utf-8')
+        raw_image = b'private-image-bytes'
+
+        with mock.patch('urllib.request.urlopen', return_value=response) \
+                as opener:
+            brief = provider.analyze_reference_image(
+                'Build a science game', raw_image, 'image/png')
+            payload = json.loads(opener.call_args[0][0].data.decode('utf-8'))
+
+        image_part = payload['contents'][0]['parts'][1]['inlineData']
+        self.assertEqual('image/png', image_part['mimeType'])
+        self.assertEqual(raw_image, base64.b64decode(image_part['data']))
+        self.assertIn('Build a science game',
+                      payload['contents'][0]['parts'][0]['text'])
+        self.assertIn('two-column game', brief)
+        self.assertNotIn(image_part['data'], brief)
+
     def test_create_deepseek_provider_uses_openai_compatible_defaults(self):
         provider = create_provider(
             'deepseek',
@@ -345,6 +381,79 @@ class TestAodLLMProviders(unittest.TestCase):
         self.assertEqual('google/gemini-3.5-flash', payload['model'])
         self.assertEqual('Sugar Activity on Demand',
                          request.get_header('X-title'))
+
+    def test_openrouter_reference_image_uses_data_url(self):
+        provider = create_provider(
+            'openrouter',
+            api_key='openrouter-key',
+        )
+        response = mock.Mock()
+        response.__enter__ = mock.Mock(return_value=response)
+        response.__exit__ = mock.Mock(return_value=False)
+        response.read.return_value = json.dumps({
+            'choices': [{
+                'message': {'content': json.dumps({
+                    'summary': 'A simple laboratory dashboard',
+                    'layout': ['toolbar above experiment area'],
+                    'visual_style': ['high contrast'],
+                    'controls': ['start button'],
+                    'visible_text': [],
+                    'behavior_notes': [],
+                    'uncertainties': [],
+                })},
+            }],
+        }).encode('utf-8')
+        raw_image = b'normalized-png'
+
+        with mock.patch('urllib.request.urlopen', return_value=response) \
+                as opener:
+            brief = provider.analyze_reference_image(
+                'Use this layout', raw_image, 'image/png')
+            payload = json.loads(opener.call_args[0][0].data.decode('utf-8'))
+
+        content = payload['messages'][1]['content']
+        self.assertEqual('text', content[0]['type'])
+        self.assertEqual('image_url', content[1]['type'])
+        data_url = content[1]['image_url']['url']
+        self.assertTrue(data_url.startswith('data:image/png;base64,'))
+        self.assertEqual(
+            raw_image,
+            base64.b64decode(data_url.split(',', 1)[1]),
+        )
+        self.assertIn('laboratory dashboard', brief)
+        self.assertNotIn(data_url, brief)
+
+    def test_reference_image_http_error_does_not_echo_response_body(self):
+        import io
+        import urllib.error
+
+        provider = create_provider('openrouter', api_key='key')
+        encoded = 'A' * 500
+        error = urllib.error.HTTPError(
+            'https://openrouter.ai/api/v1/chat/completions',
+            400,
+            'Bad request',
+            {},
+            io.BytesIO(
+                ('{"error":"data:image/png;base64,%s"}' % encoded)
+                .encode('utf-8')),
+        )
+
+        with mock.patch('urllib.request.urlopen', side_effect=error):
+            with mock.patch('time.sleep'):
+                with self.assertRaises(ProviderError) as context:
+                    provider.analyze_reference_image(
+                        'Use it', b'image', 'image/png')
+
+        self.assertNotIn(encoded, str(context.exception))
+        self.assertIn('HTTP 400', str(context.exception))
+
+    def test_only_openrouter_compatible_provider_advertises_images(self):
+        openrouter = create_provider('openrouter', api_key='key')
+        deepseek = create_provider('deepseek', api_key='key')
+
+        self.assertTrue(openrouter.supports_image_input())
+        self.assertFalse(deepseek.supports_image_input())
 
     def test_openrouter_request_accepts_structured_text_parts(self):
         provider = create_provider(

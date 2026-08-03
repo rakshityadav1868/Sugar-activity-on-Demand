@@ -90,6 +90,64 @@ class TestStudioDecoupling(unittest.TestCase):
                          _clean_generation_error_text('plain message'))
         self.assertEqual('', _clean_generation_error_text(None))
 
+    def test_refinement_prompt_respects_backend_limit(self):
+        from core.spec import MAX_PROMPT_LENGTH
+        from ui.panel import CreateAIActivityPanel
+
+        limited = CreateAIActivityPanel._limit_refinement_prompt(
+            None, 'head' + ('x' * 20000) + 'tail')
+
+        self.assertLessEqual(len(limited), MAX_PROMPT_LENGTH)
+        self.assertTrue(limited.startswith('head'))
+        self.assertTrue(limited.endswith('tail'))
+
+    def test_auto_reference_provider_falls_back_to_configured_vision(self):
+        from types import SimpleNamespace
+
+        from ui.panel import CreateAIActivityPanel
+
+        text_provider = SimpleNamespace(
+            supports_image_input=lambda: False)
+        vision_provider = SimpleNamespace(
+            supports_image_input=lambda: True)
+        providers = {
+            'freemodel': text_provider,
+            'gemini': vision_provider,
+        }
+        service = SimpleNamespace(
+            resolve_provider=lambda name: providers.get(name))
+        panel = SimpleNamespace(
+            _selected_options={'provider': 'default'})
+
+        name, provider = \
+            CreateAIActivityPanel._resolve_reference_image_provider(
+                panel, service, 'freemodel')
+
+        self.assertEqual('gemini', name)
+        self.assertIs(vision_provider, provider)
+
+    def test_local_policy_never_falls_back_to_cloud_for_reference(self):
+        from types import SimpleNamespace
+
+        from ui.panel import CreateAIActivityPanel
+
+        vision_provider = SimpleNamespace(
+            supports_image_input=lambda: True)
+        providers = {'gemini': vision_provider}
+        service = SimpleNamespace(
+            resolve_provider=lambda name: providers.get(name))
+        panel = SimpleNamespace(_selected_options={
+            'provider': 'default',
+            'policy': 'local',
+            'planner': 'rag',
+        })
+
+        unused_name, provider = \
+            CreateAIActivityPanel._resolve_reference_image_provider(
+                panel, service, 'local-template')
+
+        self.assertIsNone(provider)
+
 
 _OFFSCREEN_SCRIPT = '''
 import gi
@@ -258,11 +316,19 @@ print('OFFSCREEN-TARGET-OK')
 
 
 _OFFSCREEN_ASK_BAR_SCRIPT = '''
+import time
+from types import SimpleNamespace
+
 import gi
 gi.require_version('Gtk', '3.0')
-from gi.repository import Gtk
+gi.require_version('Gdk', '3.0')
+gi.require_version('GdkPixbuf', '2.0')
+from gi.repository import Gdk, GdkPixbuf, Gtk
 
+from core.spec import ActivitySpec
+import service.service as service_module
 from ui.panel import CreateAIActivityPanel
+from ui.reference_image import ReferenceImage
 
 window = Gtk.OffscreenWindow()
 panel = CreateAIActivityPanel()
@@ -273,6 +339,41 @@ while Gtk.events_pending():
     Gtk.main_iteration_do(False)
 
 assert panel._ask_bar_entry is not None, 'ask bar entry missing'
+assert panel._ask_bar_reference_button is not None, \
+    'reference image button missing'
+assert panel._prompt_reference_button is not None, \
+    'create prompt reference image button missing'
+assert panel._reference_image is None, 'reference should start empty'
+assert not panel._ask_bar_reference_clear.get_visible(), \
+    'studio remove button visible without attachment'
+assert not panel._prompt_reference_clear.get_visible(), \
+    'create remove button visible without attachment'
+
+# Ctrl+V attaches a clipboard image in the studio prompt. A text clipboard
+# remains available to the entry's normal paste behavior.
+paste_pixbuf = GdkPixbuf.Pixbuf.new(
+    GdkPixbuf.Colorspace.RGB, False, 8, 20, 10)
+paste_pixbuf.fill(0x3366ccff)
+clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
+clipboard.set_image(paste_pixbuf)
+paste_event = SimpleNamespace(
+    state=Gdk.ModifierType.CONTROL_MASK,
+    keyval=Gdk.KEY_v,
+)
+handled = panel._CreateAIActivityPanel__ask_bar_key_press_event_cb(
+    panel._ask_bar_entry, paste_event)
+assert handled, 'clipboard image paste was not handled'
+deadline = time.monotonic() + 3
+while panel._reference_loading_running and time.monotonic() < deadline:
+    while Gtk.events_pending():
+        Gtk.main_iteration_do(False)
+    time.sleep(0.01)
+assert panel._reference_image is not None, 'clipboard image was not attached'
+assert panel._reference_image.source_name == 'pasted-reference.png'
+panel._clear_reference_image()
+clipboard.set_text('ordinary copied text', -1)
+assert not panel._CreateAIActivityPanel__ask_bar_key_press_event_cb(
+    panel._ask_bar_entry, paste_event), 'text paste should remain native'
 
 # The ask bar must submit without depending on the removed live-edit
 # entry (which is always None now).
@@ -298,6 +399,118 @@ assert calls == [
     ('chat', 'make the score bigger'),
     ('preview', 'change the button colour'),
 ], calls
+
+# With an existing activity, an attached image can be sent without text and
+# is routed to the asynchronous reference path instead of the text path.
+pixbuf = GdkPixbuf.Pixbuf.new(
+    GdkPixbuf.Colorspace.RGB, False, 8, 2, 1)
+pixbuf.fill(0x3366ccff)
+saved, image_data = pixbuf.save_to_bufferv('png', [], [])
+assert saved
+reference = ReferenceImage(
+    data=bytes(image_data), mime_type='image/png', width=2, height=1,
+    source_name='mockup.png', sha256='abc123')
+
+panel._generation_result = object()
+panel._reference_image = reference
+panel._update_reference_image_ui()
+assert panel._ask_bar_reference_clear.get_visible()
+assert panel._prompt_reference_clear.get_visible()
+window.show_all()
+while Gtk.events_pending():
+    Gtk.main_iteration_do(False)
+assert panel._ask_bar_reference_clear.get_visible()
+assert panel._prompt_reference_clear.get_visible()
+reference_calls = []
+panel._begin_reference_image_refinement = (
+    lambda text, source: reference_calls.append((source, text)))
+panel._live_edit_enabled = False
+panel._ask_bar_entry.set_text('')
+send(None)
+assert reference_calls == [('chat', '')], reference_calls
+
+# The initial creation prompt uses the same attachment path.
+panel._generation_result = None
+panel._set_prompt_text('build a science observation game')
+panel._CreateAIActivityPanel__send_button_clicked_cb(None)
+assert reference_calls[-1] == (
+    'create', 'build a science observation game'), reference_calls
+
+# The vision result is added only to the backend prompt. The learner-facing
+# prompt stays readable, and the attachment is marked for the eventual job.
+panel._reference_analysis_running = True
+guided_calls = []
+panel._begin_guided_generation = (
+    lambda prompt, display_prompt=None:
+    guided_calls.append((prompt, display_prompt)))
+panel._reference_image_analysis_finished_cb(
+    panel._reference_analysis_serial,
+    'abc123',
+    'build a science observation game',
+    'create',
+    'Reference image brief:\\n- Layout: two large cards',
+    '',
+)
+assert len(guided_calls) == 1, guided_calls
+assert 'two large cards' in guided_calls[0][0], guided_calls
+assert guided_calls[0][1] == 'build a science observation game', guided_calls
+assert panel._reference_pending_sha == 'abc123'
+
+# Submitting the backend-expanded spec must keep the original learner prompt
+# visible. The same in-memory mockup appears in the user bubble without being
+# added to persisted session data or duplicated above the activity preview.
+submitted = []
+fake_job = SimpleNamespace(job_id='fake-job', session_id='fake-session')
+fake_service = SimpleNamespace(
+    submit_activity=lambda spec, **kwargs:
+    (submitted.append((spec, kwargs)) or fake_job),
+    watch=lambda job_id, callback: None,
+)
+service_module._service = fake_service
+panel._resolve_generation_provider_name = lambda service: 'local-template'
+panel._generation_job_updated_from_worker = lambda job: None
+backend_spec = ActivitySpec(
+    'Science Sort',
+    'BACKEND CONFIRMED REQUIREMENTS THAT MUST STAY HIDDEN',
+    'science',
+    'MIT',
+    categories=('science', 'games'),
+)
+panel._submit_generation_spec(
+    backend_spec,
+    chat_prompt='Original learner prompt',
+    display_prompt='Original learner prompt',
+)
+assert submitted and submitted[0][0].prompt.startswith('BACKEND CONFIRMED')
+assert panel._get_prompt_text() == 'Original learner prompt'
+
+def descendants(widget):
+    found = [widget]
+    if isinstance(widget, Gtk.Container):
+        for child in widget.get_children():
+            found.extend(descendants(child))
+    return found
+
+reference_images = [
+    widget for widget in descendants(panel._chat_messages_box)
+    if isinstance(widget, Gtk.Image)
+    and (widget.get_tooltip_text() or '').startswith('Reference:')
+]
+assert reference_images, 'left chat user bubble has no reference mockup'
+
+# A completed unrelated job must not clear the attachment. Only the exact
+# job that consumed this image owns cleanup.
+panel._reference_inflight_sha = 'abc123'
+panel._reference_inflight_job_id = 'reference-job'
+assert not panel._clear_reference_for_completed_job('other-job')
+assert panel._reference_image is not None
+assert panel._clear_reference_for_completed_job('reference-job')
+assert panel._reference_image is None
+window.show_all()
+while Gtk.events_pending():
+    Gtk.main_iteration_do(False)
+assert not panel._ask_bar_reference_clear.get_visible()
+assert not panel._prompt_reference_clear.get_visible()
 
 panel.destroy()
 window.destroy()
@@ -360,13 +573,15 @@ panel._guided_state['answers'] = {'mode': 'Human vs AI'}
 # step. The answers are folded into the prompt for the normal submit path.
 captured = {}
 panel._submit_generation_from_prompt = (
-    lambda prompt, chat_prompt=None: captured.update(
-        prompt=prompt, chat_prompt=chat_prompt))
+    lambda prompt, chat_prompt=None, display_prompt=None: captured.update(
+        prompt=prompt, chat_prompt=chat_prompt,
+        display_prompt=display_prompt))
 panel._commit_guided_and_build()
 assert 'chess' in captured['prompt'], captured
 assert 'Confirmed requirements' in captured['prompt'], captured
 assert 'Human vs AI' in captured['prompt'], captured
 assert captured['chat_prompt'] == 'chess'
+assert captured['display_prompt'] == 'chess'
 assert panel._guided_state is None
 
 panel.destroy()

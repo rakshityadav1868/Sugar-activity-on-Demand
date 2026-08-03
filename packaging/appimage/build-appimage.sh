@@ -167,6 +167,9 @@ log "Copying the studio into the bundle"
 rsync -a --delete \
     --exclude '.git' --exclude 'tests' --exclude '__pycache__' \
     --exclude 'dist' --exclude '.pytest_cache' \
+    --exclude 'docs/MENTOR_FEEDBACK_*.md' \
+    --exclude 'docs/learning-sidebar-mockup.svg' \
+    --exclude 'docs/maker-tools-mockups' \
     --exclude 'packaging/appimage/build' --exclude 'packaging/appimage/tools' \
     "$REPO/" "$APPDIR/usr/share/sugar-activity-studio/"
 
