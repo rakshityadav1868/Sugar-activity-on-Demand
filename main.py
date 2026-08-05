@@ -96,7 +96,13 @@ def run():
 
     _setup_theme()
 
+    from gi.repository import GLib
     from gi.repository import Gtk
+
+    # Must match sugar-aod-studio.desktop: this becomes the Wayland app id
+    # (the X11 WM_CLASS name), which is how the shell pairs the window with
+    # the installed launcher and shows its icon.
+    GLib.set_prgname('sugar-aod-studio')
 
     from ui.window import AODStudioWindow
 

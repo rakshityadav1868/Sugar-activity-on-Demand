@@ -1,10 +1,26 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128"
      viewBox="0 0 55 55">
-  <circle cx="27.5" cy="27.5" r="24.5" fill="#a800ff"/>
-  <circle cx="27.5" cy="27.5" r="18" fill="#ffffff" stroke="#282828"
-          stroke-width="3.5"/>
-  <path d="M18 28 L25 35 L38 20" fill="none" stroke="#ff2b34"
-        stroke-width="4" stroke-linecap="round"
-        stroke-linejoin="round"/>
+  <!-- Launcher icon: activity/activity.svg with literal colours, since
+       nothing outside Sugar substitutes the stroke/fill entities.
+
+       Comments belong inside <svg>, not before it: gdk-pixbuf sniffs
+       only the first 256 bytes to detect the format, and a longer
+       prologue makes it reject the file so the shell draws a blank
+       launcher. -->
+  <g transform="translate(0,1.5) translate(27.5,27.5) scale(0.74)
+                translate(-27.5,-27.5)"
+     fill="#AC32FF" stroke="#5E008C" stroke-width="4.7"
+     stroke-linecap="round" stroke-linejoin="round">
+    <path d="M33.233,35.1l10.102,10.1c0.752,0.75,1.217,1.783,1.217,2.932
+             c0,2.287-1.855,4.143-4.146,4.143c-1.145,0-2.178-0.463-2.932-1.211L27.372,40.961l-10.1,10.1c-0.75,0.75-1.787,1.211-2.934,1.211
+             c-2.284,0-4.143-1.854-4.143-4.141c0-1.146,0.465-2.184,1.212-2.934l10.104-10.102L11.409,24.995
+             c-0.747-0.748-1.212-1.785-1.212-2.93c0-2.289,1.854-4.146,4.146-4.146c1.143,0,2.18,0.465,2.93,1.214l10.099,10.102l10.102-10.103
+             c0.754-0.749,1.787-1.214,2.934-1.214c2.289,0,4.146,1.856,4.146,4.145c0,1.146-0.467,2.18-1.217,2.932L33.233,35.1z"/>
+    <circle cx="27.371" cy="10.849" r="8.122"/>
+  </g>
+  <path d="M43 4.5 Q43.8 9.2 50.5 12 Q43.8 14.8 43 19.5
+           Q42.2 14.8 35.5 12 Q42.2 9.2 43 4.5 Z"
+        fill="#AC32FF" stroke="#5E008C" stroke-width="3.5"
+        stroke-linecap="round" stroke-linejoin="round"/>
 </svg>

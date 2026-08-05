@@ -6,6 +6,7 @@
 
 from gettext import gettext as _
 import logging
+import os
 
 import gi
 gi.require_version('Gtk', '3.0')
@@ -15,6 +16,12 @@ from gi.repository import Gtk  # noqa: E402
 
 from ui.panel import CreateAIActivityPanel  # noqa: E402
 
+# The launcher copy, not activity/activity.svg: this one is drawn outside
+# Sugar, where nothing substitutes the stroke/fill entities.
+_LAUNCHER_ICON = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    'data', 'sugar-aod-studio.svg')
+
 
 class AODStudioWindow(Gtk.Window):
     """A plain desktop window around the create/studio panel."""
@@ -22,6 +29,7 @@ class AODStudioWindow(Gtk.Window):
     def __init__(self):
         Gtk.Window.__init__(self, title=_('Sugar Activity Studio'))
         self.set_position(Gtk.WindowPosition.CENTER)
+        self._set_window_icon()
         self._set_default_geometry()
 
         self.panel = CreateAIActivityPanel()
@@ -31,6 +39,15 @@ class AODStudioWindow(Gtk.Window):
 
         self.panel.connect('close-requested', self.__close_requested_cb)
         self.connect('delete-event', self.__delete_event_cb)
+
+    def _set_window_icon(self):
+        """Draw the studio's own icon in the dock, alt-tab and titlebar."""
+        if not os.path.isfile(_LAUNCHER_ICON):
+            return
+        try:
+            Gtk.Window.set_default_icon_from_file(_LAUNCHER_ICON)
+        except Exception:
+            logging.debug('Could not set the window icon', exc_info=True)
 
     def _set_default_geometry(self):
         width, height = 1280, 860
