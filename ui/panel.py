@@ -60,6 +60,24 @@ from sugar3.graphics.icon import _IconBuffer
 
 from ui.ring import HomeRingLayout
 
+# Resolved relative to this module so it works from a repo checkout and
+# from inside an installed .xo bundle.
+_ACTIVITY_ICON = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    'activity', 'activity.svg')
+
+
+def _brand_icon_kwargs(file_property='file'):
+    """Icon kwargs naming the studio's logo, or the theme XO if it is gone.
+
+    Icon takes ``file``, CanvasIcon takes ``file_name`` — hence the
+    argument.
+    """
+    if os.path.exists(_ACTIVITY_ICON):
+        return {file_property: _ACTIVITY_ICON}
+    return {'icon_name': 'computer-xo'}
+
+
 class CreateAIActivityPanel(Gtk.EventBox):
     __gtype_name__ = 'SugarCreateAIActivityPanel'
     _css_loaded = False
@@ -385,10 +403,10 @@ class CreateAIActivityPanel(Gtk.EventBox):
         brand = Gtk.HBox(spacing=style.zoom(9))
         brand.set_valign(Gtk.Align.CENTER)
         try:
-            brand_icon = Icon(icon_name='computer-xo',
-                              pixel_size=style.zoom(28),
+            brand_icon = Icon(pixel_size=style.zoom(28),
                               stroke_color='#ffffff',
-                              fill_color='#ffffff')
+                              fill_color='#ffffff',
+                              **_brand_icon_kwargs())
             brand.pack_start(brand_icon, False, False, 0)
             brand_icon.show()
         except Exception:
@@ -452,11 +470,14 @@ class CreateAIActivityPanel(Gtk.EventBox):
         empty.set_valign(Gtk.Align.CENTER)
         empty.set_margin_top(style.zoom(60))
 
-        empty_icon = Icon(icon_name='computer-xo',
-                          pixel_size=style.zoom(72))
-        empty_icon.set_halign(Gtk.Align.CENTER)
-        empty.pack_start(empty_icon, False, False, 0)
-        empty_icon.show()
+        try:
+            empty_icon = Icon(pixel_size=style.zoom(72),
+                              **_brand_icon_kwargs())
+            empty_icon.set_halign(Gtk.Align.CENTER)
+            empty.pack_start(empty_icon, False, False, 0)
+            empty_icon.show()
+        except Exception:
+            logging.exception('Could not create empty-state icon')
 
         empty_title = Gtk.Label()
         empty_title.set_markup('<span size="x-large" weight="bold">%s</span>'
@@ -540,9 +561,9 @@ class CreateAIActivityPanel(Gtk.EventBox):
 
     def _create_home_center_icon(self):
         kwargs = {
-            'icon_name': 'computer-xo',
             'pixel_size': style.XLARGE_ICON_SIZE,
         }
+        kwargs.update(_brand_icon_kwargs('file_name'))
         xo_color = self._home_icon_color()
         if xo_color is not None:
             kwargs['xo_color'] = xo_color
