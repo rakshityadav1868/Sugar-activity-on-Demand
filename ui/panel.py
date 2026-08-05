@@ -663,6 +663,15 @@ class CreateAIActivityPanel(Gtk.EventBox):
         container = Gtk.VBox(spacing=style.zoom(10))
         container.set_size_request(style.zoom(1280), -1)
 
+        try:
+            create_icon = Icon(pixel_size=style.zoom(54),
+                               **_brand_icon_kwargs())
+            create_icon.set_halign(Gtk.Align.CENTER)
+            container.pack_start(create_icon, False, False, style.zoom(4))
+            create_icon.show()
+        except Exception:
+            logging.exception('Could not create prompt-screen icon')
+
         title = Gtk.Label()
         title.set_text(_('What will you make today?'))
         title.get_style_context().add_class('create-ai-hero-title')
