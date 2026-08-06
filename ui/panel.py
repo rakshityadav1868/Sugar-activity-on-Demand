@@ -10445,6 +10445,58 @@ if clipboard.wait_is_text_available():
                 _('XO packaged for export or install.'))
         return bundle_path
 
+    def _prompt_activity_name(self):
+        """Prompt the learner to name their activity before export or install.
+
+        Returns True when the learner provides a valid name and it is updated,
+        False when they cancel or provide an empty name.
+        """
+        if self._generation_result is None:
+            return False
+
+        current_name = getattr(self._generation_result.spec, 'name', '') or ''
+
+        dialog = Gtk.Dialog(
+            title=_('Name your activity'),
+            transient_for=self.get_toplevel(),
+            modal=True,
+        )
+        dialog.add_button(_('Cancel'), Gtk.ResponseType.CANCEL)
+        dialog.add_button(_('Next'), Gtk.ResponseType.ACCEPT)
+        dialog.set_default_response(Gtk.ResponseType.ACCEPT)
+
+        content = dialog.get_content_area()
+        content.set_border_width(style.zoom(12))
+        content.set_spacing(style.zoom(6))
+
+        heading = Gtk.Label(_('Enter a name for your activity:'))
+        heading.set_xalign(0)
+        content.pack_start(heading, False, False, 0)
+        heading.show()
+
+        entry = Gtk.Entry()
+        entry.set_text(current_name)
+        entry.set_activates_default(True)
+        content.pack_start(entry, False, False, style.zoom(4))
+        entry.show()
+
+        response = dialog.run()
+        new_name = entry.get_text().strip()
+        dialog.destroy()
+
+        if response != Gtk.ResponseType.ACCEPT or not new_name:
+            return False
+
+        if new_name != current_name:
+            self._generation_result.spec.name = new_name
+            self._generation_result.bundle_path = ''
+            if self._preview_empty_title is not None:
+                self._preview_empty_title.set_text(new_name)
+            self._append_chat_status(
+                _('Activity name updated to "%s".') % new_name)
+
+        return True
+
     def _prompt_and_apply_license(self, action_label):
         """Ask for activity name and license before bundling or exporting.
 
@@ -10550,6 +10602,9 @@ if clipboard.wait_is_text_available():
                 self._prompt_status_label.set_text(_('Generate first'))
             return
 
+        if not self._prompt_activity_name():
+            return
+
         if not self._prompt_and_apply_license(_('Export')):
             return
 
@@ -10604,6 +10659,9 @@ if clipboard.wait_is_text_available():
         if self._flatpak_export_running:
             if self._prompt_status_label is not None:
                 self._prompt_status_label.set_text(_('Packaging Flatpak...'))
+            return
+
+        if not self._prompt_activity_name():
             return
 
         if not self._prompt_and_apply_license(_('Export')):
@@ -10716,6 +10774,9 @@ if clipboard.wait_is_text_available():
         if self._generation_result is None:
             if self._prompt_status_label is not None:
                 self._prompt_status_label.set_text(_('Generate first'))
+            return
+
+        if not self._prompt_activity_name():
             return
 
         if not self._prompt_and_apply_license(_('Install & Open')):

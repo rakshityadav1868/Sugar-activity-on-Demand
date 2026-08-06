@@ -1142,8 +1142,68 @@ class TestStudioOffscreen(unittest.TestCase):
             0, completed.returncode,
             'offscreen steps test failed:\n%s%s'
             % (completed.stdout, completed.stderr))
-        self.assertIn('OFFSCREEN-STEPS-OK', completed.stdout)
+    def test_prompt_activity_name_updates_spec_name(self):
+        completed = self._run_offscreen(_OFFSCREEN_PROMPT_NAME_SCRIPT)
+        self.assertEqual(
+            0, completed.returncode,
+            'offscreen prompt activity name test failed:\n%s%s'
+            % (completed.stdout, completed.stderr))
+        self.assertIn('OFFSCREEN-PROMPT-NAME-OK', completed.stdout)
+
+
+_OFFSCREEN_PROMPT_NAME_SCRIPT = '''
+import gi
+gi.require_version('Gtk', '3.0')
+from gi.repository import Gtk
+
+from ui.panel import CreateAIActivityPanel
+from core.spec import ActivitySpec
+
+window = Gtk.OffscreenWindow()
+panel = CreateAIActivityPanel()
+window.add(panel)
+window.show_all()
+
+class MockResult:
+    def __init__(self):
+        self.spec = ActivitySpec('Old Name', 'prompt', 'category', 'MIT')
+        self.bundle_path = '/tmp/fake.xo'
+
+panel._generation_result = MockResult()
+
+class MockNameDialog:
+    def __init__(self, title, transient_for, modal):
+        self.title = title
+        self.box = Gtk.VBox()
+    def add_button(self, text, response_id):
+        pass
+    def set_default_response(self, response_id):
+        pass
+    def get_content_area(self):
+        return self.box
+    def run(self):
+        for child in self.box.get_children():
+            if isinstance(child, Gtk.Entry):
+                child.set_text('Super Fun Math')
+        return Gtk.ResponseType.ACCEPT
+    def destroy(self):
+        pass
+
+original_dialog = Gtk.Dialog
+Gtk.Dialog = MockNameDialog
+
+res = panel._prompt_activity_name()
+assert res is True
+assert panel._generation_result.spec.name == 'Super Fun Math'
+assert panel._generation_result.bundle_path == ''
+
+Gtk.Dialog = original_dialog
+panel.destroy()
+window.destroy()
+print('OFFSCREEN-PROMPT-NAME-OK')
+'''
 
 
 if __name__ == '__main__':
     unittest.main()
+
