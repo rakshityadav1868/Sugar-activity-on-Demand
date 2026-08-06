@@ -415,17 +415,27 @@ def package_generation_result(result):
     return result.bundle_path
 
 
-def reapply_generation_license(result, license_id):
-    """Switch a generated activity to ``license_id`` before packaging.
+def reapply_generation_license(result, license_id, activity_name=None):
+    """Switch a generated activity to ``license_id`` and optional ``activity_name`` before packaging.
 
     Rewrites the license artifacts on disk, refreshes the in-memory file
     mapping, and invalidates any previously built bundle so the next
     :func:`package_generation_result` call repackages with the new license.
     """
-    if result.spec.license_id == license_id and result.bundle_path:
+    name_changed = bool(
+        activity_name and activity_name.strip() and
+        result.spec.name != activity_name.strip()
+    )
+    license_changed = (result.spec.license_id != license_id)
+
+    if not name_changed and not license_changed and result.bundle_path:
         return result
 
-    result.spec.license_id = license_id
+    if license_changed:
+        result.spec.license_id = license_id
+    if name_changed:
+        result.spec.name = activity_name.strip()
+
     result.files = apply_license_to_project(
         result.project_path, result.spec, result.plan)
     source = result.files.get('activity.py', '')

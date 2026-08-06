@@ -6657,6 +6657,8 @@ if clipboard.wait_is_text_available():
 
     def _refresh_generated_context(self):
         self._update_preview_license_summary()
+        if self._generation_result is not None and self._preview_empty_title is not None:
+            self._preview_empty_title.set_text(self._generation_result.spec.name)
         if self._review_title_label is not None:
             self._set_review_file(self._current_review_file)
 
@@ -10444,19 +10446,20 @@ if clipboard.wait_is_text_available():
         return bundle_path
 
     def _prompt_and_apply_license(self, action_label):
-        """Ask which license to bundle with, then apply it to the result.
+        """Ask for activity name and license before bundling or exporting.
 
-        Returns True when the learner confirms and the license is applied,
+        Returns True when the learner confirms and the options are applied,
         False when they cancel or the update fails.
         """
         if self._generation_result is None:
             return False
 
         options = self._get_license_options()
-        current = self._selected_options.get('license', 'mit')
+        current_license = self._selected_options.get('license', 'mit')
+        current_name = (self._generation_result.spec.name or '').strip()
 
         dialog = Gtk.Dialog(
-            title=_('Choose a license'),
+            title=_('Activity name & license'),
             transient_for=self.get_toplevel(),
             modal=True,
         )
@@ -10468,8 +10471,26 @@ if clipboard.wait_is_text_available():
         content.set_border_width(style.zoom(12))
         content.set_spacing(style.zoom(6))
 
+        # 1. Activity Name section
+        name_heading = Gtk.Label(
+            _('Name your activity:'))
+        name_heading.set_xalign(0)
+        content.pack_start(name_heading, False, False, 0)
+        name_heading.show()
+
+        name_entry = Gtk.Entry()
+        name_entry.set_text(current_name)
+        name_entry.set_activates_default(True)
+        content.pack_start(name_entry, False, False, 0)
+        name_entry.show()
+
+        # Separator spacing / padding
+        sep_label = Gtk.Label('')
+        content.pack_start(sep_label, False, False, 0)
+
+        # 2. License selection section
         heading = Gtk.Label(
-            _('Pick the license to bundle with this activity.'))
+            _('Pick the license to bundle with this activity:'))
         heading.set_xalign(0)
         content.pack_start(heading, False, False, 0)
         heading.show()
@@ -10481,42 +10502,46 @@ if clipboard.wait_is_text_available():
                 group, '%s — %s' % (option['label'], option['description']))
             if group is None:
                 group = radio
-            if option['value'] == current:
+            if option['value'] == current_license:
                 radio.set_active(True)
             content.pack_start(radio, False, False, 0)
             radio.show()
             buttons.append((option['value'], radio))
 
         response = dialog.run()
-        selected = current
+        selected_license = current_license
         for value, radio in buttons:
             if radio.get_active():
-                selected = value
+                selected_license = value
                 break
+        entered_name = name_entry.get_text().strip() or current_name
         dialog.destroy()
 
         if response != Gtk.ResponseType.ACCEPT:
             return False
 
-        self._selected_options['license'] = selected
+        self._selected_options['license'] = selected_license
+        self._selected_options['name'] = entered_name
 
         from generation.pipeline import reapply_generation_license
 
         license_info = self._get_selected_license()
         try:
             reapply_generation_license(
-                self._generation_result, license_info['spdx'])
+                self._generation_result, license_info['spdx'],
+                activity_name=entered_name)
         except Exception as error:
-            logging.exception('Could not apply the selected license')
+            logging.exception('Could not apply activity options')
             if self._prompt_status_label is not None:
-                self._prompt_status_label.set_text(_('License update failed'))
+                self._prompt_status_label.set_text(_('Update failed'))
             self._append_chat_message(
-                _('License update failed: %s') % error)
+                _('Update failed: %s') % error)
             return False
 
         self._refresh_generated_context()
         self._append_chat_status(
-            _('License set to %s.') % license_info['label'])
+            _('Activity named "%s" with %s license.')
+            % (entered_name, license_info['label']))
         return True
 
     def __export_xo_cb(self, button):
