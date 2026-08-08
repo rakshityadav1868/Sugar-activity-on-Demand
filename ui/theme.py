@@ -1357,6 +1357,109 @@ _CSS_TEMPLATE = '''
             button.create-ai-guided-skip:hover {
                 background-color: %(studio_preview)s;
             }
+
+            /* ── Activity-name & license prompt dialogs ─────────── */
+            .create-ai-dialog {
+                background-color: %(studio_surface)s;
+                border-radius: 14px;
+                border: 1px solid %(studio_edge)s;
+                box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18);
+            }
+            .create-ai-dialog .dialog-vbox {
+                background-color: %(studio_surface)s;
+            }
+            .create-ai-dialog-header {
+                background-color: %(studio_surface)s;
+                border-bottom: 1px solid %(studio_edge_soft)s;
+                padding: 12px 16px;
+            }
+            .create-ai-dialog-title {
+                color: %(toolbar)s;
+                font-size: 14px;
+                font-weight: 700;
+            }
+            button.create-ai-dialog-close {
+                border-radius: 999px;
+                border: 1px solid %(studio_edge)s;
+                background-image: none;
+                background-color: %(studio_preview)s;
+                color: %(toolbar)s;
+                padding: 2px;
+                min-width: 0;
+                min-height: 0;
+            }
+            button.create-ai-dialog-close:hover {
+                background-color: %(studio_lavender_soft)s;
+                border-color: %(studio_lavender_faint)s;
+            }
+            .create-ai-dialog-content {
+                background-color: %(studio_surface)s;
+            }
+            .create-ai-dialog-heading {
+                color: %(toolbar)s;
+                font-size: 13px;
+                font-weight: 600;
+            }
+            entry.create-ai-dialog-entry {
+                border-radius: 10px;
+                border: 1px solid %(studio_edge)s;
+                background-color: %(studio_preview)s;
+                padding: 8px 12px;
+                color: %(toolbar)s;
+                font-size: 12px;
+            }
+            entry.create-ai-dialog-entry:focus {
+                border-color: %(violet_soft_border)s;
+                background-color: %(studio_surface)s;
+            }
+            .create-ai-dialog-radio {
+                color: %(toolbar)s;
+                font-size: 12px;
+                background-color: %(studio_surface)s;
+            }
+            .create-ai-dialog-radio:hover {
+                background-color: %(studio_lavender_soft)s;
+            }
+            .create-ai-dialog .dialog-action-area {
+                background-color: %(studio_surface)s;
+                border-top: 1px solid %(studio_edge_soft)s;
+                padding: 10px 16px;
+            }
+            button.create-ai-dialog-cancel {
+                border-radius: 10px;
+                border: 1px solid %(studio_edge)s;
+                background-image: none;
+                background-color: %(studio_surface)s;
+                color: %(toolbar)s;
+                padding: 7px 14px;
+                font-size: 11px;
+                font-weight: 600;
+                min-height: 24px;
+            }
+            button.create-ai-dialog-cancel:hover {
+                background-color: %(studio_preview)s;
+            }
+            button.create-ai-dialog-cancel label {
+                color: %(toolbar)s;
+            }
+            button.create-ai-dialog-accept {
+                border-radius: 10px;
+                border: 1px solid %(accent)s;
+                background-image: none;
+                background-color: %(accent)s;
+                color: %(accent_text)s;
+                padding: 7px 14px;
+                font-size: 11px;
+                font-weight: 700;
+                min-height: 24px;
+            }
+            button.create-ai-dialog-accept:hover {
+                background-color: %(accent_hover)s;
+                border-color: %(accent_hover)s;
+            }
+            button.create-ai-dialog-accept label {
+                color: %(accent_text)s;
+            }
         '''
 
 

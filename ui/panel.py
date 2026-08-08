@@ -10457,27 +10457,55 @@ if clipboard.wait_is_text_available():
         current_name = getattr(self._generation_result.spec, 'name', '') or ''
 
         dialog = Gtk.Dialog(
-            title=_('Name your activity'),
             transient_for=self.get_toplevel(),
             modal=True,
         )
-        dialog.add_button(_('Cancel'), Gtk.ResponseType.CANCEL)
-        dialog.add_button(_('Next'), Gtk.ResponseType.ACCEPT)
+        dialog.set_decorated(False)
+        dialog.get_style_context().add_class('create-ai-dialog')
+        dialog.set_size_request(style.zoom(340), -1)
+
+        cancel_btn = dialog.add_button(_('Cancel'), Gtk.ResponseType.CANCEL)
+        cancel_btn.get_style_context().add_class('create-ai-dialog-cancel')
+        accept_btn = dialog.add_button(_('Next'), Gtk.ResponseType.ACCEPT)
+        accept_btn.get_style_context().add_class('create-ai-dialog-accept')
         dialog.set_default_response(Gtk.ResponseType.ACCEPT)
 
         content = dialog.get_content_area()
-        content.set_border_width(style.zoom(12))
-        content.set_spacing(style.zoom(6))
+        content.get_style_context().add_class('create-ai-dialog-content')
+        content.set_spacing(0)
+
+        # Custom light header row (replaces dark WM titlebar).
+        header = Gtk.HBox()
+        header.get_style_context().add_class('create-ai-dialog-header')
+        title_label = Gtk.Label(_('Name your activity'))
+        title_label.get_style_context().add_class('create-ai-dialog-title')
+        title_label.set_xalign(0)
+        header.pack_start(title_label, True, True, 0)
+        close_btn = Gtk.Button(label='✕')
+        close_btn.get_style_context().add_class('create-ai-dialog-close')
+        close_btn.connect(
+            'clicked', lambda b: dialog.response(Gtk.ResponseType.CANCEL))
+        header.pack_end(close_btn, False, False, 0)
+        content.pack_start(header, False, False, 0)
+        header.show_all()
+
+        # Body with padding.
+        body = Gtk.VBox(spacing=style.zoom(10))
+        body.set_border_width(style.zoom(16))
+        content.pack_start(body, True, True, 0)
+        body.show()
 
         heading = Gtk.Label(_('Enter a name for your activity:'))
         heading.set_xalign(0)
-        content.pack_start(heading, False, False, 0)
+        heading.get_style_context().add_class('create-ai-dialog-heading')
+        body.pack_start(heading, False, False, 0)
         heading.show()
 
         entry = Gtk.Entry()
         entry.set_text(current_name)
         entry.set_activates_default(True)
-        content.pack_start(entry, False, False, style.zoom(4))
+        entry.get_style_context().add_class('create-ai-dialog-entry')
+        body.pack_start(entry, False, False, style.zoom(4))
         entry.show()
 
         response = dialog.run()
@@ -10510,22 +10538,50 @@ if clipboard.wait_is_text_available():
         current = self._selected_options.get('license', 'mit')
 
         dialog = Gtk.Dialog(
-            title=_('Choose a license'),
             transient_for=self.get_toplevel(),
             modal=True,
         )
-        dialog.add_button(_('Cancel'), Gtk.ResponseType.CANCEL)
-        dialog.add_button(action_label, Gtk.ResponseType.ACCEPT)
+        dialog.set_decorated(False)
+        dialog.get_style_context().add_class('create-ai-dialog')
+        dialog.set_size_request(style.zoom(380), -1)
+
+        cancel_btn = dialog.add_button(_('Cancel'), Gtk.ResponseType.CANCEL)
+        cancel_btn.get_style_context().add_class('create-ai-dialog-cancel')
+        accept_btn = dialog.add_button(
+            action_label, Gtk.ResponseType.ACCEPT)
+        accept_btn.get_style_context().add_class('create-ai-dialog-accept')
         dialog.set_default_response(Gtk.ResponseType.ACCEPT)
 
         content = dialog.get_content_area()
-        content.set_border_width(style.zoom(12))
-        content.set_spacing(style.zoom(6))
+        content.get_style_context().add_class('create-ai-dialog-content')
+        content.set_spacing(0)
+
+        # Custom light header row (replaces dark WM titlebar).
+        header = Gtk.HBox()
+        header.get_style_context().add_class('create-ai-dialog-header')
+        title_label = Gtk.Label(_('Choose a license'))
+        title_label.get_style_context().add_class('create-ai-dialog-title')
+        title_label.set_xalign(0)
+        header.pack_start(title_label, True, True, 0)
+        close_btn = Gtk.Button(label='✕')
+        close_btn.get_style_context().add_class('create-ai-dialog-close')
+        close_btn.connect(
+            'clicked', lambda b: dialog.response(Gtk.ResponseType.CANCEL))
+        header.pack_end(close_btn, False, False, 0)
+        content.pack_start(header, False, False, 0)
+        header.show_all()
+
+        # Body with padding.
+        body = Gtk.VBox(spacing=style.zoom(10))
+        body.set_border_width(style.zoom(16))
+        content.pack_start(body, True, True, 0)
+        body.show()
 
         heading = Gtk.Label(
             _('Pick the license to bundle with this activity.'))
         heading.set_xalign(0)
-        content.pack_start(heading, False, False, 0)
+        heading.get_style_context().add_class('create-ai-dialog-heading')
+        body.pack_start(heading, False, False, 0)
         heading.show()
 
         buttons = []
@@ -10537,7 +10593,8 @@ if clipboard.wait_is_text_available():
                 group = radio
             if option['value'] == current:
                 radio.set_active(True)
-            content.pack_start(radio, False, False, 0)
+            radio.get_style_context().add_class('create-ai-dialog-radio')
+            body.pack_start(radio, False, False, 0)
             radio.show()
             buttons.append((option['value'], radio))
 
