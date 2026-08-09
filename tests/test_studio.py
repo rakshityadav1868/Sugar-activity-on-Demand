@@ -1142,6 +1142,8 @@ class TestStudioOffscreen(unittest.TestCase):
             0, completed.returncode,
             'offscreen steps test failed:\n%s%s'
             % (completed.stdout, completed.stderr))
+        self.assertIn('OFFSCREEN-STEPS-OK', completed.stdout)
+
     def test_prompt_activity_name_updates_spec_name(self):
         completed = self._run_offscreen(_OFFSCREEN_PROMPT_NAME_SCRIPT)
         self.assertEqual(
@@ -1172,19 +1174,35 @@ class MockResult:
 panel._generation_result = MockResult()
 
 class MockNameDialog:
-    def __init__(self, title, transient_for, modal):
-        self.title = title
-        self.box = Gtk.VBox()
+    def __init__(self, **kwargs):
+        self._content = Gtk.VBox()
     def add_button(self, text, response_id):
-        pass
+        return Gtk.Button(label=text)
     def set_default_response(self, response_id):
         pass
+    def set_decorated(self, decorated):
+        pass
+    def get_style_context(self):
+        return Gtk.Button().get_style_context()
+    def set_size_request(self, w, h):
+        pass
     def get_content_area(self):
-        return self.box
+        return self._content
+    def response(self, response_id):
+        pass
     def run(self):
-        for child in self.box.get_children():
-            if isinstance(child, Gtk.Entry):
-                child.set_text('Super Fun Math')
+        def _find_entry(container):
+            for child in container.get_children():
+                if isinstance(child, Gtk.Entry):
+                    return child
+                if hasattr(child, 'get_children'):
+                    found = _find_entry(child)
+                    if found is not None:
+                        return found
+            return None
+        entry = _find_entry(self._content)
+        if entry is not None:
+            entry.set_text('Super Fun Math')
         return Gtk.ResponseType.ACCEPT
     def destroy(self):
         pass

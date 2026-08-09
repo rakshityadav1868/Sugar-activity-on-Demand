@@ -10482,6 +10482,8 @@ if clipboard.wait_is_text_available():
         title_label.set_xalign(0)
         header.pack_start(title_label, True, True, 0)
         close_btn = Gtk.Button(label='✕')
+        close_btn.set_tooltip_text(_('Close'))
+        close_btn.get_accessible().set_name(_('Close'))
         close_btn.get_style_context().add_class('create-ai-dialog-close')
         close_btn.connect(
             'clicked', lambda b: dialog.response(Gtk.ResponseType.CANCEL))
@@ -10509,11 +10511,14 @@ if clipboard.wait_is_text_available():
         entry.show()
 
         response = dialog.run()
-        new_name = entry.get_text().strip()
+        new_name = ' '.join(entry.get_text().split())
         dialog.destroy()
 
         if response != Gtk.ResponseType.ACCEPT or not new_name:
             return False
+
+        if len(new_name) > 80:
+            new_name = new_name[:80]
 
         if new_name != current_name:
             self._generation_result.spec.name = new_name
@@ -10564,6 +10569,8 @@ if clipboard.wait_is_text_available():
         title_label.set_xalign(0)
         header.pack_start(title_label, True, True, 0)
         close_btn = Gtk.Button(label='✕')
+        close_btn.set_tooltip_text(_('Close'))
+        close_btn.get_accessible().set_name(_('Close'))
         close_btn.get_style_context().add_class('create-ai-dialog-close')
         close_btn.connect(
             'clicked', lambda b: dialog.response(Gtk.ResponseType.CANCEL))
