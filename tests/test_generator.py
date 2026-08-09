@@ -419,6 +419,37 @@ class TestAodGenerator(unittest.TestCase):
             self.assertIn('BSD 3-Clause License', license_file.read())
         self.assertTrue(validate_project(result.project_path).valid)
 
+    def test_reapply_license_and_activity_name(self):
+        from generation.pipeline import reapply_generation_license
+
+        spec = ActivitySpec(
+            'Original Name',
+            'Create a writing activity.',
+            'creation',
+            'MIT',
+            template='narrative',
+        )
+        result = create_prototype_activity(spec, self.output_root)
+        self.assertIn(
+            'name = Original Name',
+            result.files['activity/activity.info'],
+        )
+
+        reapply_generation_license(
+            result, 'GPL-3.0-or-later', activity_name='Renamed Activity')
+
+        self.assertEqual('Renamed Activity', result.spec.name)
+        self.assertEqual('GPL-3.0-or-later', result.spec.license_id)
+        self.assertEqual('', result.bundle_path)
+        self.assertIn(
+            'name = Renamed Activity',
+            result.files['activity/activity.info'],
+        )
+        self.assertIn(
+            'license = GPL-3.0-or-later',
+            result.files['activity/activity.info'],
+        )
+
 
 class TestActivityInfoMetadata(unittest.TestCase):
 

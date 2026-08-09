@@ -1144,6 +1144,84 @@ class TestStudioOffscreen(unittest.TestCase):
             % (completed.stdout, completed.stderr))
         self.assertIn('OFFSCREEN-STEPS-OK', completed.stdout)
 
+    def test_prompt_activity_name_updates_spec_name(self):
+        completed = self._run_offscreen(_OFFSCREEN_PROMPT_NAME_SCRIPT)
+        self.assertEqual(
+            0, completed.returncode,
+            'offscreen prompt activity name test failed:\n%s%s'
+            % (completed.stdout, completed.stderr))
+        self.assertIn('OFFSCREEN-PROMPT-NAME-OK', completed.stdout)
+
+
+_OFFSCREEN_PROMPT_NAME_SCRIPT = '''
+import gi
+gi.require_version('Gtk', '3.0')
+from gi.repository import Gtk
+
+from ui.panel import CreateAIActivityPanel
+from core.spec import ActivitySpec
+
+window = Gtk.OffscreenWindow()
+panel = CreateAIActivityPanel()
+window.add(panel)
+window.show_all()
+
+class MockResult:
+    def __init__(self):
+        self.spec = ActivitySpec('Old Name', 'prompt', 'category', 'MIT')
+        self.bundle_path = '/tmp/fake.xo'
+
+panel._generation_result = MockResult()
+
+class MockNameDialog:
+    def __init__(self, **kwargs):
+        self._content = Gtk.VBox()
+    def add_button(self, text, response_id):
+        return Gtk.Button(label=text)
+    def set_default_response(self, response_id):
+        pass
+    def set_decorated(self, decorated):
+        pass
+    def get_style_context(self):
+        return Gtk.Button().get_style_context()
+    def set_size_request(self, w, h):
+        pass
+    def get_content_area(self):
+        return self._content
+    def response(self, response_id):
+        pass
+    def run(self):
+        def _find_entry(container):
+            for child in container.get_children():
+                if isinstance(child, Gtk.Entry):
+                    return child
+                if hasattr(child, 'get_children'):
+                    found = _find_entry(child)
+                    if found is not None:
+                        return found
+            return None
+        entry = _find_entry(self._content)
+        if entry is not None:
+            entry.set_text('Super Fun Math')
+        return Gtk.ResponseType.ACCEPT
+    def destroy(self):
+        pass
+
+original_dialog = Gtk.Dialog
+Gtk.Dialog = MockNameDialog
+
+res = panel._prompt_activity_name()
+assert res is True
+assert panel._generation_result.spec.name == 'Super Fun Math'
+assert panel._generation_result.bundle_path == ''
+
+Gtk.Dialog = original_dialog
+panel.destroy()
+window.destroy()
+print('OFFSCREEN-PROMPT-NAME-OK')
+'''
+
 
 if __name__ == '__main__':
     unittest.main()
+

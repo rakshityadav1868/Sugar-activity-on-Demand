@@ -6687,6 +6687,8 @@ if clipboard.wait_is_text_available():
 
     def _refresh_generated_context(self):
         self._update_preview_license_summary()
+        if self._generation_result is not None and self._preview_empty_title is not None:
+            self._preview_empty_title.set_text(self._generation_result.spec.name)
         if self._review_title_label is not None:
             self._set_review_file(self._current_review_file)
 
@@ -10473,6 +10475,91 @@ if clipboard.wait_is_text_available():
                 _('XO packaged for export or install.'))
         return bundle_path
 
+    def _prompt_activity_name(self):
+        """Prompt the learner to name their activity before export or install.
+
+        Returns True when the learner provides a valid name and it is updated,
+        False when they cancel or provide an empty name.
+        """
+        if self._generation_result is None:
+            return False
+
+        current_name = getattr(self._generation_result.spec, 'name', '') or ''
+
+        dialog = Gtk.Dialog(
+            transient_for=self.get_toplevel(),
+            modal=True,
+        )
+        dialog.set_decorated(False)
+        dialog.get_style_context().add_class('create-ai-dialog')
+        dialog.set_size_request(style.zoom(340), -1)
+
+        cancel_btn = dialog.add_button(_('Cancel'), Gtk.ResponseType.CANCEL)
+        cancel_btn.get_style_context().add_class('create-ai-dialog-cancel')
+        accept_btn = dialog.add_button(_('Next'), Gtk.ResponseType.ACCEPT)
+        accept_btn.get_style_context().add_class('create-ai-dialog-accept')
+        dialog.set_default_response(Gtk.ResponseType.ACCEPT)
+
+        content = dialog.get_content_area()
+        content.get_style_context().add_class('create-ai-dialog-content')
+        content.set_spacing(0)
+
+        # Custom light header row (replaces dark WM titlebar).
+        header = Gtk.HBox()
+        header.get_style_context().add_class('create-ai-dialog-header')
+        title_label = Gtk.Label(_('Name your activity'))
+        title_label.get_style_context().add_class('create-ai-dialog-title')
+        title_label.set_xalign(0)
+        header.pack_start(title_label, True, True, 0)
+        close_btn = Gtk.Button(label='✕')
+        close_btn.set_tooltip_text(_('Close'))
+        close_btn.get_accessible().set_name(_('Close'))
+        close_btn.get_style_context().add_class('create-ai-dialog-close')
+        close_btn.connect(
+            'clicked', lambda b: dialog.response(Gtk.ResponseType.CANCEL))
+        header.pack_end(close_btn, False, False, 0)
+        content.pack_start(header, False, False, 0)
+        header.show_all()
+
+        # Body with padding.
+        body = Gtk.VBox(spacing=style.zoom(10))
+        body.set_border_width(style.zoom(16))
+        content.pack_start(body, True, True, 0)
+        body.show()
+
+        heading = Gtk.Label(_('Enter a name for your activity:'))
+        heading.set_xalign(0)
+        heading.get_style_context().add_class('create-ai-dialog-heading')
+        body.pack_start(heading, False, False, 0)
+        heading.show()
+
+        entry = Gtk.Entry()
+        entry.set_text(current_name)
+        entry.set_activates_default(True)
+        entry.get_style_context().add_class('create-ai-dialog-entry')
+        body.pack_start(entry, False, False, style.zoom(4))
+        entry.show()
+
+        response = dialog.run()
+        new_name = ' '.join(entry.get_text().split())
+        dialog.destroy()
+
+        if response != Gtk.ResponseType.ACCEPT or not new_name:
+            return False
+
+        if len(new_name) > 80:
+            new_name = new_name[:80]
+
+        if new_name != current_name:
+            self._generation_result.spec.name = new_name
+            self._generation_result.bundle_path = ''
+            if self._preview_empty_title is not None:
+                self._preview_empty_title.set_text(new_name)
+            self._append_chat_status(
+                _('Activity name updated to "%s".') % new_name)
+
+        return True
+
     def _prompt_and_apply_license(self, action_label):
         """Ask which license to bundle with, then apply it to the result.
 
@@ -10486,22 +10573,52 @@ if clipboard.wait_is_text_available():
         current = self._selected_options.get('license', 'mit')
 
         dialog = Gtk.Dialog(
-            title=_('Choose a license'),
             transient_for=self.get_toplevel(),
             modal=True,
         )
-        dialog.add_button(_('Cancel'), Gtk.ResponseType.CANCEL)
-        dialog.add_button(action_label, Gtk.ResponseType.ACCEPT)
+        dialog.set_decorated(False)
+        dialog.get_style_context().add_class('create-ai-dialog')
+        dialog.set_size_request(style.zoom(380), -1)
+
+        cancel_btn = dialog.add_button(_('Cancel'), Gtk.ResponseType.CANCEL)
+        cancel_btn.get_style_context().add_class('create-ai-dialog-cancel')
+        accept_btn = dialog.add_button(
+            action_label, Gtk.ResponseType.ACCEPT)
+        accept_btn.get_style_context().add_class('create-ai-dialog-accept')
         dialog.set_default_response(Gtk.ResponseType.ACCEPT)
 
         content = dialog.get_content_area()
-        content.set_border_width(style.zoom(12))
-        content.set_spacing(style.zoom(6))
+        content.get_style_context().add_class('create-ai-dialog-content')
+        content.set_spacing(0)
+
+        # Custom light header row (replaces dark WM titlebar).
+        header = Gtk.HBox()
+        header.get_style_context().add_class('create-ai-dialog-header')
+        title_label = Gtk.Label(_('Choose a license'))
+        title_label.get_style_context().add_class('create-ai-dialog-title')
+        title_label.set_xalign(0)
+        header.pack_start(title_label, True, True, 0)
+        close_btn = Gtk.Button(label='✕')
+        close_btn.set_tooltip_text(_('Close'))
+        close_btn.get_accessible().set_name(_('Close'))
+        close_btn.get_style_context().add_class('create-ai-dialog-close')
+        close_btn.connect(
+            'clicked', lambda b: dialog.response(Gtk.ResponseType.CANCEL))
+        header.pack_end(close_btn, False, False, 0)
+        content.pack_start(header, False, False, 0)
+        header.show_all()
+
+        # Body with padding.
+        body = Gtk.VBox(spacing=style.zoom(10))
+        body.set_border_width(style.zoom(16))
+        content.pack_start(body, True, True, 0)
+        body.show()
 
         heading = Gtk.Label(
             _('Pick the license to bundle with this activity.'))
         heading.set_xalign(0)
-        content.pack_start(heading, False, False, 0)
+        heading.get_style_context().add_class('create-ai-dialog-heading')
+        body.pack_start(heading, False, False, 0)
         heading.show()
 
         buttons = []
@@ -10513,7 +10630,8 @@ if clipboard.wait_is_text_available():
                 group = radio
             if option['value'] == current:
                 radio.set_active(True)
-            content.pack_start(radio, False, False, 0)
+            radio.get_style_context().add_class('create-ai-dialog-radio')
+            body.pack_start(radio, False, False, 0)
             radio.show()
             buttons.append((option['value'], radio))
 
@@ -10553,6 +10671,9 @@ if clipboard.wait_is_text_available():
         if self._generation_result is None:
             if self._prompt_status_label is not None:
                 self._prompt_status_label.set_text(_('Generate first'))
+            return
+
+        if not self._prompt_activity_name():
             return
 
         if not self._prompt_and_apply_license(_('Export')):
@@ -10609,6 +10730,9 @@ if clipboard.wait_is_text_available():
         if self._flatpak_export_running:
             if self._prompt_status_label is not None:
                 self._prompt_status_label.set_text(_('Packaging Flatpak...'))
+            return
+
+        if not self._prompt_activity_name():
             return
 
         if not self._prompt_and_apply_license(_('Export')):
@@ -10721,6 +10845,9 @@ if clipboard.wait_is_text_available():
         if self._generation_result is None:
             if self._prompt_status_label is not None:
                 self._prompt_status_label.set_text(_('Generate first'))
+            return
+
+        if not self._prompt_activity_name():
             return
 
         if not self._prompt_and_apply_license(_('Install & Open')):
