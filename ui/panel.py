@@ -184,19 +184,49 @@ def _activity_reflection_prompts(plan):
         plan.get('interaction_model', ''))).lower()
     if any(word in haystack for word in ('game', 'race', 'obstacle')):
         return (_('Play one round and try the main controls.'),
-                _('Notice when the goal, score, and feedback feel clear.'),
-                _('What would make the next try fairer or more fun?'))
+                _('Watch what changes when you move, meet an obstacle, '
+                  'score, or reach the goal.'),
+                _('Explain in your own words how an action changes what '
+                  'happens next.'),
+                _('Imagine one change that would make the next round '
+                  'clearer, fairer, or more fun.'))
     if 'quiz' in haystack:
         return (_('Answer one question, including one wrong answer.'),
                 _('Notice whether the feedback helps you understand why.'),
-                _('What would make the next question clearer?'))
+                _('Explain how the activity responds to an answer and helps '
+                  'you decide what to try next.'),
+                _('Imagine one change that would make the next question '
+                  'clearer or more helpful.'))
     if any(word in haystack for word in ('draw', 'paint', 'create')):
         return (_('Make something using at least two tools.'),
                 _('Notice which tool or instruction needs more explanation.'),
-                _('What would help you create with less friction?'))
+                _('Explain how your choices and the tools changed what '
+                  'appeared on the canvas.'),
+                _('Imagine one change that would help you create with less '
+                  'friction.'))
     return (_('Try the activity once from start to finish.'),
             _('Notice what feels clear and where you pause.'),
-            _('What is the one change that would help most?'))
+            _('Explain in your own words what you did and how the activity '
+              'responded.'),
+            _('Imagine the one change that would help most next time.'))
+
+
+def _activity_student_explanation(plan):
+    """Summarize the interaction as a short, observable learner loop."""
+    plan = plan if isinstance(plan, dict) else {}
+    behavior = plan.get('interaction_model') or plan.get('summary') or \
+        _('Try an action and watch how the activity responds.')
+    steps = plan.get('learner_steps') or plan.get('classroom_flow') or []
+    if not isinstance(steps, (list, tuple)):
+        steps = [steps] if steps else []
+    visible_steps = [str(step).strip() for step in steps[:4]
+                     if str(step).strip()]
+    if not visible_steps:
+        return str(behavior)
+    return '%s\n\n%s\n%s' % (
+        behavior,
+        _('Follow the loop:'),
+        '\n'.join('• %s' % step for step in visible_steps))
 
 
 def _activity_health_rows(plan):
@@ -451,6 +481,7 @@ class CreateAIActivityPanel(Gtk.EventBox):
         self._activity_tools_understand_sections = None
         self._activity_tools_reflection_steps = []
         self._activity_tools_reflection_text = None
+        self._activity_tools_reflection_prompt_label = None
         self._activity_tools_reflection_status = None
         self._activity_tools_reflection_notes = {}
         self._activity_tools_notes_box = None
@@ -5907,17 +5938,27 @@ class CreateAIActivityPanel(Gtk.EventBox):
         reflection_box = Gtk.VBox(spacing=style.zoom(8))
         reflection_box.set_border_width(style.zoom(10))
         reflection.add(reflection_box)
-        reflection_title = Gtk.Label(_('Your observation'))
+        reflection_title = Gtk.Label(_('What did you discover?'))
         reflection_title.get_style_context().add_class(
             'create-ai-activity-tools-card-title')
         reflection_title.set_xalign(0)
         reflection_box.pack_start(reflection_title, False, False, 0)
+        reflection_prompt = Gtk.Label(
+            _('Explain what happened in your own words. There is no single '
+              'right answer.'))
+        self._activity_tools_reflection_prompt_label = reflection_prompt
+        reflection_prompt.get_style_context().add_class(
+            'create-ai-activity-tools-reflection-prompt')
+        reflection_prompt.set_xalign(0)
+        reflection_prompt.set_line_wrap(True)
+        reflection_prompt.set_max_width_chars(35)
+        reflection_box.pack_start(reflection_prompt, False, False, 0)
         starters = Gtk.Grid()
         starters.set_row_spacing(style.zoom(5))
         starters.set_column_spacing(style.zoom(5))
         for index, label in enumerate((
-                _('I noticed…'), _('I got stuck when…'),
-                _('I would change…'))):
+                _('I noticed…'), _('I think this happened because…'),
+                _('Next time I would…'))):
             button = Gtk.Button.new_with_label(label)
             button.set_relief(Gtk.ReliefStyle.NONE)
             button.get_style_context().add_class(
@@ -5925,7 +5966,7 @@ class CreateAIActivityPanel(Gtk.EventBox):
             button.connect('clicked', self.__activity_tools_starter_cb,
                            label[:-1].strip())
             button.set_hexpand(True)
-            starters.attach(button, index % 2, index // 2, 1, 1)
+            starters.attach(button, 0, index, 1, 1)
         reflection_box.pack_start(starters, False, False, 0)
         note_scroll = Gtk.ScrolledWindow()
         note_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
@@ -5936,12 +5977,12 @@ class CreateAIActivityPanel(Gtk.EventBox):
         note.get_style_context().add_class('create-ai-activity-tools-note')
         note_scroll.add(note)
         reflection_box.pack_start(note_scroll, False, False, 0)
-        note_actions = Gtk.HBox(spacing=style.zoom(6))
+        note_actions = Gtk.VBox(spacing=style.zoom(6))
         note_actions.pack_start(self._create_activity_tools_action_button(
-            _('Keep note'), self.__activity_tools_save_note_cb),
+            _('Save reflection'), self.__activity_tools_save_note_cb),
             False, False, 0)
-        note_actions.pack_end(self._create_activity_tools_action_button(
-            _('Use as a change'), self.__activity_tools_note_to_change_cb,
+        note_actions.pack_start(self._create_activity_tools_action_button(
+            _('Turn into a change'), self.__activity_tools_note_to_change_cb,
             primary=True), False, False, 0)
         reflection_box.pack_start(note_actions, False, False, 0)
         note_status = Gtk.Label('')
@@ -6284,13 +6325,22 @@ class CreateAIActivityPanel(Gtk.EventBox):
             getattr(result.spec, 'prompt', '')
         overview.pack_start(self._activity_tools_info_card(
             _('Learning purpose'), str(goal)), False, False, 0)
-        for index, (title, prompt) in enumerate(zip(
-                (_('1 · Try'), _('2 · Notice'), _('3 · Think')),
-                _activity_reflection_prompts(plan))):
+        overview.pack_start(self._activity_tools_info_card(
+            _('How this activity works'),
+            _activity_student_explanation(plan)), False, False, 0)
+        reflection_prompts = _activity_reflection_prompts(plan)
+        for title, prompt in zip(
+                (_('1 · Try it'), _('2 · Notice'),
+                 _('3 · Explain'), _('4 · Imagine')),
+                reflection_prompts):
             card = self._activity_tools_info_card(title, prompt)
             card.get_style_context().add_class(
                 'create-ai-activity-tools-reflection-step')
             overview.pack_start(card, False, False, 0)
+        if self._activity_tools_reflection_prompt_label is not None:
+            self._activity_tools_reflection_prompt_label.set_text(
+                _('%s\n\nUse a starter below, or write your own thought.')
+                % reflection_prompts[2])
 
         source = ''
         files = getattr(result, 'files', None)
@@ -6361,7 +6411,8 @@ class CreateAIActivityPanel(Gtk.EventBox):
             text = str(note.get('content', '')).strip()
             if text:
                 self._activity_tools_notes_box.pack_start(
-                    self._activity_tools_info_card(_('Saved for this version'),
+                    self._activity_tools_info_card(
+                        _('Your saved reflection'),
                                                    text), False, False, 0)
         overview.show_all()
         sections_box.show_all()

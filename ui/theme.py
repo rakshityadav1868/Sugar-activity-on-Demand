@@ -1397,6 +1397,10 @@ _CSS_TEMPLATE = '''
                 font-size: 14px;
                 font-weight: 700;
             }
+            .create-ai-activity-tools-reflection-prompt {
+                color: %(inactive_stroke)s;
+                font-size: 11px;
+            }
             .create-ai-activity-tools-reflection-step {
                 border-left: 4px solid %(accent_violet)s;
             }

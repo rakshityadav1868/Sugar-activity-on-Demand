@@ -74,10 +74,19 @@ class TestStudioDecoupling(unittest.TestCase):
 
     def test_reflection_prompts_are_activity_specific(self):
         from ui.panel import _activity_reflection_prompts
+        from ui.panel import _activity_student_explanation
         prompts = _activity_reflection_prompts({
             'template': 'game', 'summary': 'Swim around obstacles'})
+        self.assertEqual(4, len(prompts))
         self.assertIn('round', prompts[0].lower())
         self.assertIn('score', prompts[1].lower())
+        self.assertIn('own words', prompts[2].lower())
+        explanation = _activity_student_explanation({
+            'interaction_model': 'Move the swimmer with arrow keys.',
+            'learner_steps': ['Start swimming', 'Avoid a jellyfish'],
+        })
+        self.assertIn('Move the swimmer', explanation)
+        self.assertIn('• Avoid a jellyfish', explanation)
 
     def test_learning_area_cards_use_bundled_sugar_artwork(self):
         from ui.panel import _learning_area_icon_kwargs
@@ -1290,7 +1299,12 @@ pump()
 assert panel._activity_tools_stack.get_visible_child_name() == 'understand'
 overview = panel._activity_tools_understand_overview.get_children()
 sections = panel._activity_tools_understand_sections.get_children()
-assert len(overview) >= 2, 'overview cards: %d' % len(overview)
+assert len(overview) >= 6, 'overview cards: %d' % len(overview)
+understand_labels = all_label_text(
+    panel._activity_tools_stack.get_child_by_name('understand'))
+for expected in ('How this activity works', '1 · Try it', '2 · Notice',
+                 '3 · Explain', '4 · Imagine', 'What did you discover?'):
+    assert expected in understand_labels, (expected, understand_labels)
 assert len(sections) >= 5, 'code sections: %d' % len(sections)
 assert not panel._activity_tools_code_revealer.get_reveal_child()
 assert not panel._activity_tools_health_revealer.get_reveal_child()
