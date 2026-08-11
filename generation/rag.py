@@ -180,6 +180,11 @@ def get_api_reference():
     return _API_REFERENCE
 
 
+def get_ui_design_reference():
+    """Return best-effort Sugar UI guidance for generated activities."""
+    return _UI_DESIGN_REFERENCE
+
+
 def _find_activity_source(bundle_path):
     info_path = os.path.join(bundle_path, 'activity', 'activity.info')
     exec_module = ''
@@ -294,8 +299,31 @@ def _source_tags(source):
     return tuple(sorted(tags))
 
 
+_SEARCH_STOP_WORDS = {
+    'a', 'about', 'activity', 'an', 'and', 'are', 'as', 'at', 'be', 'been',
+    'being', 'build', 'by', 'can', 'create', 'do', 'does', 'for', 'from',
+    'has', 'have', 'how', 'i', 'if', 'in', 'into', 'is', 'it', 'its',
+    'learner', 'learners', 'make', 'of', 'on', 'or', 'our', 'should', 'that',
+    'the', 'their', 'them', 'then', 'this', 'to', 'use', 'using', 'was',
+    'we', 'what', 'when', 'where', 'which', 'while', 'will', 'with', 'you',
+    'your', 'available', 'based', 'features', 'journal', 'only', 's',
+    'screen', 'selected', 'view',
+}
+
+
 def _tokens(value):
-    return set(re.findall(r'[a-z0-9_]+', value.lower()))
+    """Tokenize search text without letting prompt prose swamp intent.
+
+    Provider prompts are often several paragraphs long.  Scoring common words
+    such as "activity", "use", and "with" made large unrelated installed
+    sources beat the small built-in interaction patterns.  Removing those
+    words keeps retrieval focused on mechanics such as swimming, keyboard,
+    physics, drawing, or persistence.
+    """
+    return {
+        token for token in re.findall(r'[a-z0-9_]+', value.lower())
+        if token not in _SEARCH_STOP_WORDS
+    }
 
 
 _API_REFERENCE = """Sugar Activity API reference:
@@ -315,11 +343,94 @@ _API_REFERENCE = """Sugar Activity API reference:
   - sugar3.graphics.icon.Icon: Sugar icon widget (icon_name, pixel_size)
 """
 
+_UI_DESIGN_REFERENCE = """Sugar whole-interface design contract:
+- Treat the activity as a full-screen Sugar workspace, not a web page or a
+  desktop dashboard. The learner's creation/play surface is the dominant
+  region and expands to use the available window.
+- Keep controls out of the creation canvas unless direct manipulation is the
+  activity itself. Put primary actions in ToolbarBox; put mode-specific
+  actions in ToolbarButton sub-toolbars or Sugar palettes. Add a persistent
+  side/bottom panel only when its contents must remain relevant while the
+  learner works, and keep it compact.
+- Use Sugar toolkit controls before raw GTK equivalents: ToolButton,
+  ToggleToolButton, RadioToolButton, ColorToolButton, Icon, Palette,
+  PaletteMenuItem, HTray/VTray, NotifyAlert, and ConfirmationAlert.
+- Let the Sugar GTK theme render normal buttons, entries, toggles, scales,
+  notebooks, and scrollbars. Do not impose a universal card theme, brand-blue
+  headings, shadows, gradients, or rounded web-app panels. Custom CSS is only
+  for a request-specific canvas/control and must use style.COLOR_* values.
+- Use style.GRID_CELL_SIZE for major regions, style.DEFAULT_SPACING and
+  style.DEFAULT_PADDING (or style.zoom values derived from them) for rhythm,
+  and style.STANDARD_ICON_SIZE/SMALL_ICON_SIZE/LARGE_ICON_SIZE for icons.
+  Clickable targets must remain comfortable for children; avoid tiny text
+  links and tightly packed controls.
+- Keep activity chrome grayscale. Use COLOR_TOOLBAR_GREY, COLOR_BUTTON_GREY,
+  COLOR_SELECTION_GREY, COLOR_PANEL_GREY, COLOR_TEXT_FIELD_GREY, black, and
+  white according to their Sugar roles. Bright content colors are welcome in
+  drawings, simulations, and games. XO colors identify a learner or an object
+  owned by that learner; they are not arbitrary branding accents.
+- Use the theme's normal font and readable black-on-white text for sustained
+  reading. Prefer concise labels and symbolic icons with palettes/tooltips to
+  oversized marketing headings. Empty states pair a Sugar Icon with a short
+  instruction; feedback uses visible state plus Sugar alerts when needed.
+- Use simple, high-contrast SVG/Sugar icons and existing icon names. Disabled,
+  selected, hover, pressed, turn, success, and error states must remain clear
+  without relying on hue alone.
+- Use icon names from Sugar Artwork for every repeated or toolbar action.
+  Never substitute emoji, Unicode pictograms, ASCII arrows, or a text-only
+  toolbar button for a Sugar icon. Pair unfamiliar icons with a Sugar palette
+  or tooltip, and use a compact Icon + instruction row for setup/empty states.
+- Match Sugar's visual hierarchy: one black/grey ToolbarBox, a mostly white
+  learner workspace, strong outlined icons, and bright XO-like color pairs
+  only inside learner content. Avoid pastel web-card collections and avoid
+  placing the activity name in a second oversized heading below the toolbar.
+- Sugar-native must still feel deliberately designed: align related controls
+  to the same spacing grid, use sentence-case labels, keep action targets
+  compact and consistent, and leave breathing room around the learner's work.
+  Do not put every instruction, requirement, tool, and status value in its own
+  bordered Gtk.Frame. Use at most one quiet contextual strip or tray beside
+  the dominant workspace, with separators or whitespace for grouping.
+- A primary action such as Check, Play, Hint, Undo, Redo, Clear, or Next
+  belongs in ToolbarBox as a Sugar ToolButton with a real Sugar Artwork icon
+  and tooltip. Never turn it into a tall or stretched text button beside the
+  canvas. Keep mode controls together in one ToolbarButton palette/sub-toolbar;
+  reveal advanced settings only when that mode needs them.
+- For drawing and construction activities, the canvas gets all remaining
+  space. Put the current challenge and success criteria in one concise status
+  row, and put brush, size, color, symmetry, or similar tools in a compact tray
+  or contextual palette. Controls must not squeeze the drawable area or make
+  the learner scan three competing panels before starting.
+- Build responsively for 1024x768 and 1200x900: no hard-coded miniature work
+  areas, clipped sidebars, or wide wrapped labels. DrawingAreas and boards
+  size from their allocation and center their content. Scrolled regions are
+  used for content that can genuinely grow.
+- Preserve Sugar's learner model: direct manipulation, immediate reversible
+  feedback, Journal persistence, and visible participant ownership/turns for
+  partner activities. The entire interface should look at home beside Write,
+  Read, Browse, Calculate, Chat, and Pippy, while the activity content remains
+  specific to the learner's request.
+- Visual polish cannot hide broken behavior. Every visible control must update
+  real model state and give visible feedback; selected tools/modes must alter
+  interaction; Undo/Redo and Reset must keep their enabled state accurate;
+  success checks must derive from learner state rather than fixed messages;
+  resizing must preserve usable geometry; and Journal restore must redraw the
+  same learner-visible state.
+"""
+
 _REFERENCE_DOCUMENTS = (
     RagDocument(
         title='Sugar activity lifecycle and bundle contract',
         text=_API_REFERENCE,
         tags=('api', 'bundle', 'journal', 'sugar', 'toolbar'),
+    ),
+    RagDocument(
+        title='Sugar whole-interface visual and interaction contract',
+        text=_UI_DESIGN_REFERENCE,
+        tags=(
+            'canvas', 'colors', 'controls', 'design', 'icons', 'layout',
+            'palette', 'panel', 'responsive', 'style', 'sugar', 'toolbar',
+            'ui',
+        ),
     ),
     RagDocument(
         title='Minimal Sugar activity.py contract',
@@ -445,6 +556,27 @@ _REFERENCE_DOCUMENTS = (
             'learner-owned input.'
         ),
         tags=('tool', 'utility', 'example'),
+    ),
+    RagDocument(
+        title='GTK3 real-time game loop and cairo pattern',
+        text=(
+            'For a keyboard-driven real-time Sugar game, use an expanding '
+            'Gtk.DrawingArea, connect draw plus key-press-event and '
+            'key-release-event, and drive short updates with '
+            'GLib.timeout_add(33, tick). Keep pressed-key state on self so '
+            'each activity instance starts clean. Show a visible start state '
+            'with the player, controls, and goal before advancing hazards. '
+            'Each tick updates state and calls queue_draw; never block the GTK '
+            'thread. Test every entity type and delayed/random render branch. '
+            'The cairo draw context cannot accept custom attributes or '
+            'methods. For an ellipse: cr.save(); cr.translate(cx, cy); '
+            'cr.scale(rx, ry); cr.arc(0, 0, 1, 0, 2 * math.pi); cr.restore(); '
+            'then cr.fill() or cr.stroke(). Keep the player visible after '
+            'damage and reset keys, entities, timers, and end-state flags on '
+            'restart.'
+        ),
+        tags=('animation', 'cairo', 'game', 'gtk3', 'keyboard', 'loop',
+              'realtime', 'state'),
     ),
     RagDocument(
         title='sugargame / pygame activity pattern',

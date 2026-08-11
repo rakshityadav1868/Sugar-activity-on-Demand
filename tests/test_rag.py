@@ -33,6 +33,44 @@ class TestAodRag(unittest.TestCase):
         )
         self.assertEqual('Drawing example', results[0].title)
 
+    def test_long_prompt_common_words_do_not_outrank_game_mechanics(self):
+        corpus = [
+            RagDocument(
+                'Large unrelated source',
+                'activity learner use with and the create build ' * 100,
+                ('sugar',),
+            ),
+            RagDocument(
+                'Physics game loop',
+                'Keyboard strokes drive an animated swimming simulation.',
+                ('game', 'keyboard', 'physics', 'swimming', 'animation'),
+            ),
+        ]
+
+        results = search(
+            'Create an activity where the learner uses keyboard strokes '
+            'for a swimming physics simulation.',
+            corpus=corpus,
+        )
+
+        self.assertEqual('Physics game loop', results[0].title)
+
+    def test_default_corpus_contains_whole_interface_contract(self):
+        titles = [document.title for document in build_corpus(
+            activity_roots=())]
+        self.assertIn(
+            'Sugar whole-interface visual and interaction contract', titles)
+
+    def test_realtime_game_query_prefers_safe_gtk_game_pattern(self):
+        results = search(
+            'swimming obstacle race keyboard controls animation loop state',
+            limit=3,
+            corpus=build_corpus(activity_roots=()),
+        )
+
+        self.assertEqual(
+            'GTK3 real-time game loop and cairo pattern', results[0].title)
+
     def test_build_corpus_includes_manifest_and_support_sources(self):
         with tempfile.TemporaryDirectory() as root:
             bundle = os.path.join(root, 'PairDraw.activity')
