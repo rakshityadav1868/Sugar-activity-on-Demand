@@ -65,7 +65,8 @@ class TestActivitySpec(unittest.TestCase):
         self.assertEqual(
             spec, ActivitySpec.from_dict(spec.to_dict()))
         self.assertIn(
-            'Selected learning areas (combine all): science, games',
+            'Selected discovery tags (context only; do not inject curriculum '
+            'or mechanics absent from the idea): science, games',
             spec.to_prompt())
 
     def test_normalized_learning_categories_are_unique_and_keep_primary(self):

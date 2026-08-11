@@ -170,7 +170,7 @@ class ActivitySpec:
         return asdict(self)
 
     def to_prompt(self):
-        goal = self.learner_goal or 'Infer a learner goal from the idea.'
+        goal = self.learner_goal or 'Infer the activity goal from the idea.'
         idea, requirements = _split_confirmed_requirements(self.prompt)
         lines = [
             'Activity name: %s' % self.name,
@@ -184,8 +184,9 @@ class ActivitySpec:
                 'Confirmed requirements (the learner explicitly chose these '
                 '— honor every one):\n%s' % requirements)
         lines.extend([
-            'Learning category: %s' % self.category,
-            'Selected learning areas (combine all): %s' % ', '.join(
+            'Discovery category: %s' % self.category,
+            'Selected discovery tags (context only; do not inject curriculum '
+            'or mechanics absent from the idea): %s' % ', '.join(
                 self.learning_categories()),
             'Template preference: %s' % self.template,
             'Age band: %s' % self.age_band,
