@@ -24,6 +24,16 @@ class ProviderError(Exception):
     pass
 
 
+class ProviderImageUnsupportedError(ProviderError):
+    """The configured model cannot read image input for a reference image.
+
+    Raised when a model that is text-only is asked to analyse an image (for
+    example a non-vision OpenRouter route).  Callers that have access to a
+    vision-capable provider use this as a signal to fall back instead of
+    surfacing a raw "Cannot read image.png" style error to the learner.
+    """
+
+
 def _env_int(name, default):
     try:
         return int(os.environ.get(name, str(default)))
@@ -50,6 +60,7 @@ _GEMINI_CODEGEN_MAX_OUTPUT_TOKENS = _env_int(
 # activity.py both fit.  See OpenAICompatibleProvider._is_reasoning_codegen.
 _OPENROUTER_REASONING_CODEGEN_MAX_TOKENS = 32000
 _OPENROUTER_FAST_CODEGEN_MAX_TOKENS = 16384
+_OPENROUTER_PLAN_MAX_TOKENS = 4096
 _OPENROUTER_REASONING_CODEGEN_EFFORT = 'minimal'
 # Special effort values that map to disabling reasoning entirely.  These are
 # only safe for non-mandatory reasoning models; mandatory reasoning models
@@ -62,6 +73,37 @@ _REASONING_SAFE_MINIMAL_EFFORT = 'minimal'
 # short backoff turns "job failed" into "job took a moment longer".
 _TRANSIENT_HTTP_CODES = (429, 500, 502, 503, 504, 529)
 _TRANSIENT_RETRIES = _env_int('AOD_PROVIDER_TRANSIENT_RETRIES', 2)
+
+
+def _valid_reference_image(image_data, mime_type):
+    return isinstance(image_data, bytes) and bool(image_data) and \
+        mime_type in ('image/png', 'image/jpeg')
+
+
+def _gemini_user_parts(user_prompt, image_data=None, mime_type=''):
+    parts = [{'text': user_prompt}]
+    if _valid_reference_image(image_data, mime_type):
+        parts.append({
+            'inlineData': {
+                'mimeType': mime_type,
+                'data': base64.b64encode(image_data).decode('ascii'),
+            },
+        })
+    return parts
+
+
+def _chat_user_content(user_prompt, image_data=None, mime_type=''):
+    if not _valid_reference_image(image_data, mime_type):
+        return user_prompt
+    data_url = 'data:%s;base64,%s' % (
+        mime_type, base64.b64encode(image_data).decode('ascii'))
+    return [
+        {'type': 'text', 'text': user_prompt},
+        {
+            'type': 'image_url',
+            'image_url': {'url': data_url, 'detail': 'high'},
+        },
+    ]
 
 
 def _urlopen_with_retry(request, timeout, label):
@@ -245,35 +287,45 @@ class GeminiProvider(LLMProvider):
 
     def generate_text(self, system_prompt, user_prompt,
                       timeout=_PROVIDER_CODEGEN_TIMEOUT,
-                      stream_callback=None):
+                      stream_callback=None, image_data=None,
+                      image_mime_type=''):
         if stream_callback is not None:
             return self._stream_content(
                 system_prompt, user_prompt, timeout,
                 max_output_tokens=_GEMINI_CODEGEN_MAX_OUTPUT_TOKENS,
                 stream_callback=stream_callback,
+                image_data=image_data,
+                image_mime_type=image_mime_type,
             )
         return self._generate_content(
             system_prompt, user_prompt, timeout,
             max_output_tokens=_GEMINI_CODEGEN_MAX_OUTPUT_TOKENS,
             response_json=False,
+            image_data=image_data,
+            image_mime_type=image_mime_type,
         )
 
     def generate_activity_source(self, system_prompt, user_prompt,
                                  timeout=_PROVIDER_CODEGEN_TIMEOUT,
                                  stream_callback=None,
-                                 max_output_tokens=None):
+                                 max_output_tokens=None, image_data=None,
+                                 image_mime_type=''):
         tokens = max_output_tokens or _GEMINI_CODEGEN_MAX_OUTPUT_TOKENS
         if stream_callback is not None:
             text = self._stream_content(
                 system_prompt, user_prompt, timeout,
                 max_output_tokens=tokens,
                 stream_callback=stream_callback,
+                image_data=image_data,
+                image_mime_type=image_mime_type,
             )
         else:
             text = self._generate_content(
                 system_prompt, user_prompt, timeout,
                 max_output_tokens=tokens,
                 response_json=False,
+                image_data=image_data,
+                image_mime_type=image_mime_type,
             )
         return extract_activity_source_from_response(text)
 
@@ -290,7 +342,8 @@ class GeminiProvider(LLMProvider):
         )
 
     def _generate_content(self, system_prompt, user_prompt, timeout,
-                          max_output_tokens=None, response_json=True):
+                          max_output_tokens=None, response_json=True,
+                          image_data=None, image_mime_type=''):
         model = urllib.parse.quote(self.model, safe='')
         key = urllib.parse.quote(self._api_key, safe='')
         url = '%s/%s:generateContent?key=%s' % (
@@ -311,7 +364,8 @@ class GeminiProvider(LLMProvider):
             },
             'contents': [{
                 'role': 'user',
-                'parts': [{'text': user_prompt}],
+                'parts': _gemini_user_parts(
+                    user_prompt, image_data, image_mime_type),
             }],
             'generationConfig': generation_config,
             'safetySettings': self._SAFETY_SETTINGS,
@@ -350,10 +404,17 @@ class GeminiProvider(LLMProvider):
             )
         if not text:
             raise ProviderError('Gemini returned an empty response.')
+        if _valid_reference_image(image_data, image_mime_type) and \
+                _is_image_unsupported_error(text):
+            raise ProviderImageUnsupportedError(
+                'The configured Gemini model cannot read the reference '
+                'image. Falling back to its analyzed text brief.'
+            )
         return text
 
     def _stream_content(self, system_prompt, user_prompt, timeout,
-                        max_output_tokens=None, stream_callback=None):
+                        max_output_tokens=None, stream_callback=None,
+                        image_data=None, image_mime_type=''):
         """Call Gemini's streaming endpoint and feed tokens to stream_callback.
 
         Uses :streamGenerateContent?alt=sse instead of :generateContent
@@ -377,7 +438,8 @@ class GeminiProvider(LLMProvider):
             },
             'contents': [{
                 'role': 'user',
-                'parts': [{'text': user_prompt}],
+                'parts': _gemini_user_parts(
+                    user_prompt, image_data, image_mime_type),
             }],
             'generationConfig': generation_config,
             'safetySettings': self._SAFETY_SETTINGS,
@@ -458,6 +520,12 @@ class GeminiProvider(LLMProvider):
 
         if not accumulated:
             raise ProviderError('Gemini streaming returned an empty response.')
+        if _valid_reference_image(image_data, image_mime_type) and \
+                _is_image_unsupported_error(accumulated):
+            raise ProviderImageUnsupportedError(
+                'The configured Gemini model cannot read the reference '
+                'image. Falling back to its analyzed text brief.'
+            )
         if finish_reason == 'MAX_TOKENS':
             raise ProviderError(
                 'Gemini stopped early: output token budget exhausted '
@@ -538,30 +606,44 @@ class OpenAIProvider(LLMProvider):
             response_data,
             '%s image analysis' % self._request_label(),
         )
+        if _is_image_unsupported_error(text):
+            raise ProviderImageUnsupportedError(
+                'The configured %s model (%s) does not support image input, '
+                'so the reference image could not be read. A vision-capable '
+                'model or provider is required.' % (
+                    self._request_label(), self.model))
         return format_reference_brief(extract_json_object(text))
 
     def generate_text(self, system_prompt, user_prompt,
                       timeout=_PROVIDER_CODEGEN_TIMEOUT,
-                      stream_callback=None, max_output_tokens=None):
+                      stream_callback=None, max_output_tokens=None,
+                      image_data=None, image_mime_type=''):
         tokens = max_output_tokens or _CODEGEN_MAX_TOKENS
         if stream_callback is not None:
             return self._stream_text(
                 system_prompt, user_prompt, timeout,
                 max_tokens=tokens,
                 stream_callback=stream_callback,
+                image_data=image_data,
+                image_mime_type=image_mime_type,
             )
         return self._generate_text(
             system_prompt, user_prompt, timeout,
             max_tokens=tokens, json_response=False,
+            image_data=image_data,
+            image_mime_type=image_mime_type,
         )
 
     def generate_activity_source(self, system_prompt, user_prompt,
                                  timeout=_PROVIDER_CODEGEN_TIMEOUT,
-                                 stream_callback=None, max_output_tokens=None):
+                                 stream_callback=None, max_output_tokens=None,
+                                 image_data=None, image_mime_type=''):
         text = self.generate_text(
             system_prompt, user_prompt, timeout,
             stream_callback=stream_callback,
             max_output_tokens=max_output_tokens,
+            image_data=image_data,
+            image_mime_type=image_mime_type,
         )
         return extract_activity_source_from_response(text)
 
@@ -578,7 +660,8 @@ class OpenAIProvider(LLMProvider):
         )
 
     def _stream_text(self, system_prompt, user_prompt, timeout,
-                     max_tokens, stream_callback):
+                     max_tokens, stream_callback, image_data=None,
+                     image_mime_type=''):
         """Stream a chat-completion response token-by-token via SSE.
 
         Returns the full accumulated text once the stream ends; on the
@@ -590,7 +673,8 @@ class OpenAIProvider(LLMProvider):
             'model': self.model,
             'messages': [
                 {'role': 'system', 'content': system_prompt},
-                {'role': 'user', 'content': user_prompt},
+                {'role': 'user', 'content': _chat_user_content(
+                    user_prompt, image_data, image_mime_type)},
             ],
             'temperature': self._generation_temperature(),
             'stream': True,
@@ -643,6 +727,13 @@ class OpenAIProvider(LLMProvider):
                         pass
         except urllib.error.HTTPError as error:
             detail = error.read().decode('utf-8', errors='replace')[:500]
+            if _valid_reference_image(image_data, image_mime_type) and \
+                    _is_image_unsupported_error(detail):
+                raise ProviderImageUnsupportedError(
+                    'The configured model cannot read the reference image '
+                    '(no image input support). Falling back to its analyzed '
+                    'text brief.'
+                )
             raise ProviderError(
                 '%s stream failed with HTTP %d: %s'
                 % (self._request_label(), error.code, detail)
@@ -671,12 +762,14 @@ class OpenAIProvider(LLMProvider):
         return text
 
     def _generate_text(self, system_prompt, user_prompt, timeout,
-                       max_tokens=None, json_response=True):
+                       max_tokens=None, json_response=True, image_data=None,
+                       image_mime_type=''):
         payload = {
             'model': self.model,
             'messages': [
                 {'role': 'system', 'content': system_prompt},
-                {'role': 'user', 'content': user_prompt},
+                {'role': 'user', 'content': _chat_user_content(
+                    user_prompt, image_data, image_mime_type)},
             ],
             'temperature': self._generation_temperature(),
         }
@@ -692,11 +785,20 @@ class OpenAIProvider(LLMProvider):
             self._request_headers(),
             timeout,
             self._request_label(),
+            safe_error=_valid_reference_image(
+                image_data, image_mime_type),
         )
         text = _chat_completion_message_text(
             response_data,
             self._request_label(),
         )
+        if _valid_reference_image(image_data, image_mime_type) and \
+                _is_image_unsupported_error(text):
+            raise ProviderImageUnsupportedError(
+                'The configured model cannot read the reference image '
+                '(no image input support). Falling back to its analyzed '
+                'text brief.'
+            )
         return text
 
     def _extra_generation_params(self, max_tokens, json_response):
@@ -837,6 +939,19 @@ class OpenAICompatibleProvider(OpenAIProvider):
 
     def _extra_generation_params(self, max_tokens, json_response):
         params = {}
+        # OpenRouter may reserve a model's entire completion allowance when a
+        # JSON/planning request omits max_tokens.  Large-context models can
+        # consequently fail the preflight credit check (HTTP 402) even though
+        # an activity plan only needs a small JSON response.  Keep planning
+        # bounded independently from the much larger activity.py budget.
+        if json_response and self._provider_name == 'openrouter':
+            plan_budget = max_tokens or _env_int(
+                'AOD_OPENROUTER_PLAN_MAX_TOKENS',
+                _OPENROUTER_PLAN_MAX_TOKENS,
+            )
+            params['max_tokens'] = max(512, min(plan_budget, 8192))
+            return params
+
         # For codegen (non-JSON) calls on OpenRouter, set minimal reasoning.
         # OpenRouter defaults to extra thinking for many models, which adds
         # a long delay before the first useful activity.py token. Minimal
@@ -1363,6 +1478,7 @@ def _raise_response_error(response_data, label):
 
 
 def _content_to_text(value):
+    """Flatten a provider content field (str / list / dict) to plain text."""
     if isinstance(value, str):
         return value
     if isinstance(value, list):
@@ -1380,6 +1496,31 @@ def _content_to_text(value):
     return ''
 
 
+_IMAGE_UNSUPPORTED_MARKERS = (
+    'does not support image',
+    'doesn\'t support image',
+    'cannot read image',
+    'can\'t read image',
+    'no image input',
+    'not support image input',
+    'image input not supported',
+    'cannot process image',
+)
+
+
+def _is_image_unsupported_error(value):
+    """True when a model reply says the model cannot read the attached image.
+
+    OpenRouter and other gateways surface this as an assistant message such
+    as "ERROR: Cannot read image.png (this model does not support image
+    input)" when the routed model is text-only.  Callers turn this into a
+    :class:`ProviderImageUnsupportedError` so the reference flow can fall
+    back to a vision-capable provider.
+    """
+    lowered = _content_to_text(value).lower()
+    return any(marker in lowered for marker in _IMAGE_UNSUPPORTED_MARKERS)
+
+
 def _post_json(url, payload, headers, timeout, label, safe_error=False):
     request = urllib.request.Request(
         url,
@@ -1391,7 +1532,26 @@ def _post_json(url, payload, headers, timeout, label, safe_error=False):
         with _urlopen_with_retry(request, timeout, label) as response:
             response_data = json.loads(response.read().decode('utf-8'))
     except urllib.error.HTTPError as error:
+        if error.code == 402:
+            raise ProviderError(
+                '%s request failed with HTTP 402: insufficient API credits '
+                'for the requested output budget. Add credits or lower the '
+                'output token limit.' % label
+            )
         if safe_error:
+            # OpenRouter rejects images sent to text-only routes with HTTP
+            # 400.  Classify that so callers can fall back to a vision
+            # provider; the raw body is never echoed back to the user.
+            try:
+                body = error.read().decode('utf-8', errors='replace')
+            except OSError:
+                body = ''
+            if _is_image_unsupported_error(body):
+                raise ProviderImageUnsupportedError(
+                    'The configured model cannot read the reference image '
+                    '(no image input support). Use a vision-capable model '
+                    'or provider.'
+                )
             raise ProviderError(
                 '%s request failed with HTTP %d.' % (label, error.code))
         detail = error.read().decode('utf-8', errors='replace')[:500]
@@ -1403,6 +1563,12 @@ def _post_json(url, payload, headers, timeout, label, safe_error=False):
         raise ProviderError('%s request failed: %s' % (label, error))
     if safe_error and isinstance(response_data, dict) and \
             response_data.get('error'):
+        if _is_image_unsupported_error(response_data.get('error')):
+            raise ProviderImageUnsupportedError(
+                'The configured model cannot read the reference image '
+                '(no image input support). Use a vision-capable model '
+                'or provider.'
+            )
         raise ProviderError(
             '%s request failed: %s' % (
                 label,

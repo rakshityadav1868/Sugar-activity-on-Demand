@@ -15,6 +15,7 @@ from llm.providers import OpenAICompatibleProvider
 from llm.providers import OpenAIProvider
 from llm.providers import OllamaProvider
 from llm.providers import ProviderError
+from llm.providers import ProviderImageUnsupportedError
 from llm.providers import create_provider
 from llm.providers import get_configured_provider
 from llm.providers import get_default_provider_name
@@ -305,6 +306,38 @@ class TestAodLLMProviders(unittest.TestCase):
         self.assertIn('two-column game', brief)
         self.assertNotIn(image_part['data'], brief)
 
+    def test_gemini_codegen_receives_reference_image_pixels(self):
+        provider = GeminiProvider(api_key='test-key')
+        response = mock.Mock()
+        response.__enter__ = mock.Mock(return_value=response)
+        response.__exit__ = mock.Mock(return_value=False)
+        response.read.return_value = json.dumps({
+            'candidates': [{
+                'content': {'parts': [{'text': (
+                    '```python\n%s```' % _simple_activity_source()
+                )}]},
+                'finishReason': 'STOP',
+            }],
+        }).encode('utf-8')
+        raw_image = b'normalized-reference-pixels'
+
+        with mock.patch('urllib.request.urlopen', return_value=response) \
+                as opener:
+            source = provider.generate_activity_source(
+                'system', 'write the activity',
+                image_data=raw_image,
+                image_mime_type='image/png',
+            )
+            payload = json.loads(
+                opener.call_args[0][0].data.decode('utf-8'))
+
+        parts = payload['contents'][0]['parts']
+        self.assertEqual('write the activity', parts[0]['text'])
+        self.assertEqual('image/png', parts[1]['inlineData']['mimeType'])
+        self.assertEqual(
+            raw_image, base64.b64decode(parts[1]['inlineData']['data']))
+        self.assertIn('GeneratedActivity', source)
+
     def test_create_deepseek_provider_uses_openai_compatible_defaults(self):
         provider = create_provider(
             'deepseek',
@@ -448,6 +481,66 @@ class TestAodLLMProviders(unittest.TestCase):
         self.assertNotIn(encoded, str(context.exception))
         self.assertIn('HTTP 400', str(context.exception))
 
+    def test_reference_image_text_only_model_raises_image_unsupported(self):
+        """A text-only OpenRouter route replies with a model-side message.
+
+        The reference flow must classify this as an image-capability failure
+        so it can fall back to a vision provider instead of showing a raw
+        "Cannot read image.png" style error.
+        """
+        provider = create_provider(
+            'openrouter',
+            api_key='openrouter-key',
+        )
+        response = mock.Mock()
+        response.__enter__ = mock.Mock(return_value=response)
+        response.__exit__ = mock.Mock(return_value=False)
+        response.read.return_value = json.dumps({
+            'choices': [{
+                'message': {
+                    'content': 'ERROR: Cannot read image.png (this model '
+                               'does not support image input)',
+                },
+            }],
+        }).encode('utf-8')
+
+        with mock.patch('urllib.request.urlopen', return_value=response):
+            with self.assertRaises(ProviderImageUnsupportedError) as context:
+                provider.analyze_reference_image(
+                    'Use this layout', b'normalized-png', 'image/png')
+
+        message = str(context.exception)
+        self.assertIn('does not support image input', message)
+        self.assertIn('vision-capable', message)
+
+    def test_reference_image_text_only_model_http_400_is_classified(self):
+        """OpenRouter rejects images for text-only routes with HTTP 400."""
+        import io
+        import urllib.error
+
+        provider = create_provider('openrouter', api_key='key')
+        error = urllib.error.HTTPError(
+            'https://openrouter.ai/api/v1/chat/completions',
+            400,
+            'Bad request',
+            {},
+            io.BytesIO(json.dumps({
+                'error': {
+                    'message': 'This model does not support image input.',
+                },
+            }).encode('utf-8')),
+        )
+
+        with mock.patch('urllib.request.urlopen', side_effect=error):
+            with mock.patch('time.sleep'):
+                with self.assertRaises(ProviderImageUnsupportedError) \
+                        as context:
+                    provider.analyze_reference_image(
+                        'Use it', b'image', 'image/png')
+
+        self.assertNotIn('image.png', str(context.exception))
+        self.assertIn('vision-capable', str(context.exception))
+
     def test_only_openrouter_compatible_provider_advertises_images(self):
         openrouter = create_provider('openrouter', api_key='key')
         deepseek = create_provider('deepseek', api_key='key')
@@ -474,10 +567,35 @@ class TestAodLLMProviders(unittest.TestCase):
             }],
         }).encode('utf-8')
 
-        with mock.patch('urllib.request.urlopen', return_value=response):
+        with mock.patch('urllib.request.urlopen', return_value=response) \
+                as opener:
             plan = provider.generate_plan('system', 'user')
+            payload = json.loads(
+                opener.call_args[0][0].data.decode('utf-8'))
 
         self.assertEqual('canvas', plan['template'])
+        self.assertEqual(4096, payload['max_tokens'])
+
+    def test_openrouter_plan_budget_can_be_configured_and_is_bounded(self):
+        provider = create_provider('openrouter', api_key='openrouter-key')
+        response = mock.Mock()
+        response.__enter__ = mock.Mock(return_value=response)
+        response.__exit__ = mock.Mock(return_value=False)
+        response.read.return_value = json.dumps({
+            'choices': [{
+                'message': {'content': '{"template": "canvas"}'},
+            }],
+        }).encode('utf-8')
+
+        with mock.patch.dict(
+                os.environ, {'AOD_OPENROUTER_PLAN_MAX_TOKENS': '65536'}):
+            with mock.patch('urllib.request.urlopen', return_value=response) \
+                    as opener:
+                provider.generate_plan('system', 'user')
+                payload = json.loads(
+                    opener.call_args[0][0].data.decode('utf-8'))
+
+        self.assertEqual(8192, payload['max_tokens'])
 
     def test_openrouter_request_reports_missing_text_content(self):
         provider = create_provider(
@@ -522,6 +640,30 @@ class TestAodLLMProviders(unittest.TestCase):
 
         self.assertIn('OpenRouter request failed', str(context.exception))
         self.assertIn('Insufficient credits', str(context.exception))
+
+    def test_openrouter_http_402_explains_credit_or_budget_problem(self):
+        import io
+        import urllib.error
+
+        provider = create_provider('openrouter', api_key='openrouter-key')
+        error = urllib.error.HTTPError(
+            'https://openrouter.ai/api/v1/chat/completions',
+            402,
+            'Payment required',
+            {},
+            io.BytesIO(b'{"error":{"message":"sensitive detail"}}'),
+        )
+
+        with mock.patch('urllib.request.urlopen', side_effect=error):
+            with mock.patch('time.sleep'):
+                with self.assertRaises(ProviderError) as context:
+                    provider.generate_plan('system', 'user')
+
+        message = str(context.exception)
+        self.assertIn('HTTP 402', message)
+        self.assertIn('insufficient API credits', message)
+        self.assertIn('lower the output token limit', message)
+        self.assertNotIn('sensitive detail', message)
 
     def test_openrouter_request_reports_length_finish_reason(self):
         provider = create_provider(
@@ -604,7 +746,68 @@ class TestAodLLMProviders(unittest.TestCase):
         self.assertEqual(16384, payload['max_tokens'])
         self.assertEqual({'effort': 'minimal'}, payload['reasoning'])
 
-    def test_openrouter_plan_call_is_not_affected_by_reasoning_budget(self):
+    def test_openrouter_codegen_receives_reference_image_pixels(self):
+        provider = create_provider(
+            'openrouter',
+            api_key='openrouter-key',
+        )
+        response = mock.Mock()
+        response.__enter__ = mock.Mock(return_value=response)
+        response.__exit__ = mock.Mock(return_value=False)
+        response.read.return_value = json.dumps({
+            'choices': [{
+                'message': {
+                    'content': '```python\n%s```' % _simple_activity_source(),
+                },
+            }],
+        }).encode('utf-8')
+        raw_image = b'normalized-reference-pixels'
+
+        with mock.patch('urllib.request.urlopen', return_value=response) \
+                as opener:
+            source = provider.generate_activity_source(
+                'system', 'write the activity',
+                image_data=raw_image,
+                image_mime_type='image/jpeg',
+            )
+            payload = json.loads(
+                opener.call_args[0][0].data.decode('utf-8'))
+
+        content = payload['messages'][1]['content']
+        self.assertEqual('text', content[0]['type'])
+        self.assertEqual('write the activity', content[0]['text'])
+        self.assertEqual('image_url', content[1]['type'])
+        self.assertEqual('high', content[1]['image_url']['detail'])
+        data_url = content[1]['image_url']['url']
+        self.assertTrue(data_url.startswith('data:image/jpeg;base64,'))
+        self.assertEqual(
+            raw_image,
+            base64.b64decode(data_url.split(',', 1)[1]),
+        )
+        self.assertIn('GeneratedActivity', source)
+
+    def test_openrouter_codegen_classifies_model_side_image_rejection(self):
+        provider = create_provider('openrouter', api_key='openrouter-key')
+        response = mock.Mock()
+        response.__enter__ = mock.Mock(return_value=response)
+        response.__exit__ = mock.Mock(return_value=False)
+        response.read.return_value = json.dumps({
+            'choices': [{
+                'message': {
+                    'content': 'Cannot read image: no image input support.',
+                },
+            }],
+        }).encode('utf-8')
+
+        with mock.patch('urllib.request.urlopen', return_value=response):
+            with self.assertRaises(ProviderImageUnsupportedError):
+                provider.generate_activity_source(
+                    'system', 'user',
+                    image_data=b'image',
+                    image_mime_type='image/png',
+                )
+
+    def test_openrouter_plan_call_has_separate_bounded_budget(self):
         provider = create_provider(
             'openrouter',
             api_key='openrouter-key',
@@ -625,11 +828,11 @@ class TestAodLLMProviders(unittest.TestCase):
                 opener.call_args[0][0].data.decode('utf-8')
             )
 
-        # Plan requests keep the default temperature and are uncapped and
-        # must not gain reasoning-effort parameters: only codegen budgets
-        # reasoning so the plan JSON gets delivered reliably.
+        # Plan requests must not gain codegen reasoning parameters. They do
+        # need a small independent cap so OpenRouter does not reserve the
+        # model's entire context window and reject an affordable JSON plan.
         self.assertNotIn('reasoning', payload)
-        self.assertNotIn('max_tokens', payload)
+        self.assertEqual(4096, payload['max_tokens'])
 
     def test_openrouter_codegen_budget_overridable_by_environment(self):
         provider = create_provider(
