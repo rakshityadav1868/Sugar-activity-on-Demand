@@ -136,6 +136,97 @@ def _prompt_control_icon_kwargs(control, fallback_icon_name):
     return _sugar_action_icon_kwargs(fallback_icon_name)
 
 
+def _activity_tools_presets(plan, source=''):
+    """Return honest quick changes supported by this activity's shape."""
+    plan = plan if isinstance(plan, dict) else {}
+    haystack = ' '.join(str(value) for value in (
+        plan.get('template', ''), plan.get('summary', ''),
+        plan.get('interaction_model', ''), source[:5000])).lower()
+    presets = [
+        (_('Clearer instructions'),
+         _('Make the instructions and goal clearer without changing the '
+           'activity’s main idea.')),
+        (_('Improve appearance'),
+         _('Improve the colors, spacing, and visual hierarchy while keeping '
+           'the activity readable and fully working.')),
+        (_('Fix a problem'),
+         _('Find and fix the most important interaction or gameplay problem '
+           'while preserving the current activity.')),
+        (_('Larger text'),
+         _('Increase important text and control labels while keeping the '
+           'layout clear and usable.')),
+    ]
+    if any(word in haystack for word in
+           ('game', 'quiz', 'challenge', 'score', 'obstacle', 'race')):
+        presets.insert(0, (
+            _('Adjust challenge'),
+            _('Adjust the challenge so it is engaging and fair, with clear '
+              'feedback and a reachable goal.')))
+    if any(word in haystack for word in
+           ('level', 'round', 'stage', 'game', 'race')):
+        presets.append((
+            _('Add a level'),
+            _('Add one complete next level with progress, feedback, and a '
+              'working way to continue or replay.')))
+    if any(word in haystack for word in
+           ('key', 'keyboard', 'click', 'drag', 'control', 'swim', 'move')):
+        presets.append((
+            _('Improve controls'),
+            _('Make the controls responsive, discoverable, and consistent '
+              'without changing the activity goal.')))
+    return presets[:6]
+
+
+def _activity_reflection_prompts(plan):
+    plan = plan if isinstance(plan, dict) else {}
+    haystack = ' '.join(str(value) for value in (
+        plan.get('template', ''), plan.get('summary', ''),
+        plan.get('interaction_model', ''))).lower()
+    if any(word in haystack for word in ('game', 'race', 'obstacle')):
+        return (_('Play one round and try the main controls.'),
+                _('Notice when the goal, score, and feedback feel clear.'),
+                _('What would make the next try fairer or more fun?'))
+    if 'quiz' in haystack:
+        return (_('Answer one question, including one wrong answer.'),
+                _('Notice whether the feedback helps you understand why.'),
+                _('What would make the next question clearer?'))
+    if any(word in haystack for word in ('draw', 'paint', 'create')):
+        return (_('Make something using at least two tools.'),
+                _('Notice which tool or instruction needs more explanation.'),
+                _('What would help you create with less friction?'))
+    return (_('Try the activity once from start to finish.'),
+            _('Notice what feels clear and where you pause.'),
+            _('What is the one change that would help most?'))
+
+
+def _activity_health_rows(plan):
+    """Translate pipeline evidence into truthful, non-judgmental statuses."""
+    plan = plan if isinstance(plan, dict) else {}
+    verification = str(plan.get('verification_status', '')).lower()
+    runtime = str(plan.get('runtime_check', '')).lower()
+    critic = str(plan.get('critic', '')).lower()
+
+    def state(value, passed=('passed', 'ok')):
+        if any(value == item or value.startswith(item + ':')
+               for item in passed):
+            return _('Passed')
+        if value.startswith('skipped'):
+            return _('Skipped')
+        if value in ('failed', 'error') or value.startswith('failed:'):
+            return _('Failed')
+        return _('Unavailable')
+
+    return [
+        (_('Code checks'), state(verification)),
+        (_('Activity launch'), state(runtime)),
+        (_('Journal save test'),
+         _('Passed') if runtime == 'passed' else
+         (_('Skipped') if runtime.startswith('skipped') else
+          _('Unavailable'))),
+        (_('Model review'), state(critic, ('ok', 'patched'))),
+    ]
+
+
 class CreateAIActivityPanel(Gtk.EventBox):
     __gtype_name__ = 'SugarCreateAIActivityPanel'
     _css_loaded = False
@@ -351,8 +442,23 @@ class CreateAIActivityPanel(Gtk.EventBox):
         self._activity_tools_whole_target = None
         self._activity_tools_selected_target = None
         self._activity_tools_selected_target_label = None
+        self._activity_tools_selected_target_box = None
+        self._activity_tools_presets_grid = None
+        self._activity_tools_preset_buttons = []
+        self._activity_tools_selected_preset = None
+        self._activity_tools_selected_preset_label = None
         self._activity_tools_understand_overview = None
         self._activity_tools_understand_sections = None
+        self._activity_tools_reflection_steps = []
+        self._activity_tools_reflection_text = None
+        self._activity_tools_reflection_status = None
+        self._activity_tools_reflection_notes = {}
+        self._activity_tools_notes_box = None
+        self._activity_tools_code_revealer = None
+        self._activity_tools_code_toggle = None
+        self._activity_tools_health_box = None
+        self._activity_tools_health_revealer = None
+        self._activity_tools_health_toggle = None
         self._prompt_is_placeholder = False
         self._enhance_button = None
         self._enhance_chip = None
@@ -5530,9 +5636,9 @@ class CreateAIActivityPanel(Gtk.EventBox):
         self._activity_tools_home_first_button = change
         page.pack_start(change, False, False, 0)
         page.pack_start(self._create_activity_tools_choice(
-            'view-source', _('See how it works'),
-            _('Learning idea, steps, and important code'),
-            _('Explore the activity  ›'), 'understand'), False, False, 0)
+            'view-source', _('Understand & reflect'),
+            _('Try it, notice what happens, and improve it'),
+            _('Explore and reflect  ›'), 'understand'), False, False, 0)
 
         safe = Gtk.EventBox()
         safe.get_style_context().add_class(
@@ -5657,14 +5763,17 @@ class CreateAIActivityPanel(Gtk.EventBox):
         return button
 
     def _create_activity_tools_change_page(self):
+        outer = Gtk.VBox(spacing=style.zoom(9))
+        outer.pack_start(self._create_activity_tools_page_header(
+            _('Change this activity'), 'change'), False, False, 0)
+
         scroll = Gtk.ScrolledWindow()
         self._activity_tools_change_scroll = scroll
         scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         page = Gtk.VBox(spacing=style.zoom(10))
         page.set_border_width(style.zoom(2))
         scroll.add_with_viewport(page)
-        page.pack_start(self._create_activity_tools_page_header(
-            _('Change this activity'), 'change'), False, False, 0)
+        outer.pack_start(scroll, True, True, 0)
 
         target_title = Gtk.Label(_('What should change?'))
         target_title.get_style_context().add_class('create-ai-meta-label')
@@ -5682,15 +5791,17 @@ class CreateAIActivityPanel(Gtk.EventBox):
         selected.get_style_context().add_class(
             'create-ai-activity-tools-radio')
         page.pack_start(whole, False, False, 0)
-        page.pack_start(selected, False, False, 0)
-
+        selected_box = Gtk.VBox(spacing=style.zoom(2))
+        self._activity_tools_selected_target_box = selected_box
+        selected_box.pack_start(selected, False, False, 0)
         selected_label = Gtk.Label('')
         self._activity_tools_selected_target_label = selected_label
         selected_label.get_style_context().add_class('create-ai-meta-note')
         selected_label.set_xalign(0)
         selected_label.set_line_wrap(True)
         selected_label.set_max_width_chars(36)
-        page.pack_start(selected_label, False, False, 0)
+        selected_box.pack_start(selected_label, False, False, 0)
+        page.pack_start(selected_box, False, False, 0)
 
         preset_title = Gtk.Label(_('Quick changes'))
         preset_title.get_style_context().add_class('create-ai-meta-label')
@@ -5698,28 +5809,18 @@ class CreateAIActivityPanel(Gtk.EventBox):
         page.pack_start(preset_title, False, False, 0)
 
         presets = Gtk.Grid()
+        self._activity_tools_presets_grid = presets
         presets.set_row_spacing(style.zoom(6))
         presets.set_column_spacing(style.zoom(6))
-        changes = (
-            (_('Make it harder'),
-             _('Increase the challenge with one meaningful next step while '
-               'keeping the activity understandable.')),
-            (_('Change theme'),
-             _('Refresh the activity colors and visual treatment while '
-               'keeping it native to Sugar and easy to read.')),
-            (_('Add a level'),
-             _('Add one complete next level only if it fits the current '
-               'activity, including progress and feedback.')),
-            (_('Larger text'),
-             _('Increase important text and control labels while keeping '
-               'the activity layout clear and usable.')),
-        )
-        for index, (label, prompt) in enumerate(changes):
-            button = self._create_activity_tools_action_button(label)
-            button.connect('clicked', self.__activity_tools_preset_cb, prompt)
-            button.set_hexpand(True)
-            presets.attach(button, index % 2, index // 2, 1, 1)
         page.pack_start(presets, False, False, 0)
+
+        selected_preset = Gtk.Label('')
+        self._activity_tools_selected_preset_label = selected_preset
+        selected_preset.get_style_context().add_class(
+            'create-ai-activity-tools-selection')
+        selected_preset.set_xalign(0)
+        selected_preset.set_line_wrap(True)
+        page.pack_start(selected_preset, False, False, 0)
 
         entry = Gtk.Entry()
         self._activity_tools_change_entry = entry
@@ -5731,11 +5832,6 @@ class CreateAIActivityPanel(Gtk.EventBox):
         whole.connect('toggled', self.__activity_tools_input_changed_cb)
         selected.connect('toggled', self.__activity_tools_input_changed_cb)
         page.pack_start(entry, False, False, 0)
-
-        plan_button = self._create_activity_tools_action_button(
-            _('Plan this change'), self.__activity_tools_plan_change_cb,
-            primary=True)
-        page.pack_start(plan_button, False, False, 0)
 
         confirm = Gtk.Revealer()
         self._activity_tools_change_confirm = confirm
@@ -5778,15 +5874,19 @@ class CreateAIActivityPanel(Gtk.EventBox):
         status.set_xalign(0)
         status.set_line_wrap(True)
         status.set_max_width_chars(38)
-        page.pack_start(status, False, False, 0)
-        scroll.show_all()
+        outer.pack_start(status, False, False, 0)
+        plan_button = self._create_activity_tools_action_button(
+            _('Review change'), self.__activity_tools_plan_change_cb,
+            primary=True)
+        outer.pack_end(plan_button, False, False, 0)
+        outer.show_all()
         confirm.set_reveal_child(False)
-        return scroll
+        return outer
 
     def _create_activity_tools_understand_page(self):
         page = Gtk.VBox(spacing=style.zoom(10))
         page.pack_start(self._create_activity_tools_page_header(
-            _('See how it works'), 'understand'), False, False, 0)
+            _('Understand & reflect'), 'understand'), False, False, 0)
 
         scroll = Gtk.ScrolledWindow()
         scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
@@ -5800,12 +5900,91 @@ class CreateAIActivityPanel(Gtk.EventBox):
         self._activity_tools_understand_overview = overview
         self._activity_tools_understand_sections = sections
         content.pack_start(overview, False, False, 0)
-        heading = Gtk.Label(_('Important code'))
-        heading.get_style_context().add_class('create-ai-meta-label')
-        heading.set_xalign(0)
-        content.pack_start(heading, False, False, style.zoom(4))
-        content.pack_start(sections, False, False, 0)
+
+        reflection = Gtk.EventBox()
+        reflection.get_style_context().add_class(
+            'create-ai-activity-tools-reflection')
+        reflection_box = Gtk.VBox(spacing=style.zoom(8))
+        reflection_box.set_border_width(style.zoom(10))
+        reflection.add(reflection_box)
+        reflection_title = Gtk.Label(_('Your observation'))
+        reflection_title.get_style_context().add_class(
+            'create-ai-activity-tools-card-title')
+        reflection_title.set_xalign(0)
+        reflection_box.pack_start(reflection_title, False, False, 0)
+        starters = Gtk.Grid()
+        starters.set_row_spacing(style.zoom(5))
+        starters.set_column_spacing(style.zoom(5))
+        for index, label in enumerate((
+                _('I noticed…'), _('I got stuck when…'),
+                _('I would change…'))):
+            button = Gtk.Button.new_with_label(label)
+            button.set_relief(Gtk.ReliefStyle.NONE)
+            button.get_style_context().add_class(
+                'create-ai-activity-tools-starter')
+            button.connect('clicked', self.__activity_tools_starter_cb,
+                           label[:-1].strip())
+            button.set_hexpand(True)
+            starters.attach(button, index % 2, index // 2, 1, 1)
+        reflection_box.pack_start(starters, False, False, 0)
+        note_scroll = Gtk.ScrolledWindow()
+        note_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        note_scroll.set_size_request(-1, style.zoom(88))
+        note = Gtk.TextView()
+        self._activity_tools_reflection_text = note
+        note.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        note.get_style_context().add_class('create-ai-activity-tools-note')
+        note_scroll.add(note)
+        reflection_box.pack_start(note_scroll, False, False, 0)
+        note_actions = Gtk.HBox(spacing=style.zoom(6))
+        note_actions.pack_start(self._create_activity_tools_action_button(
+            _('Keep note'), self.__activity_tools_save_note_cb),
+            False, False, 0)
+        note_actions.pack_end(self._create_activity_tools_action_button(
+            _('Use as a change'), self.__activity_tools_note_to_change_cb,
+            primary=True), False, False, 0)
+        reflection_box.pack_start(note_actions, False, False, 0)
+        note_status = Gtk.Label('')
+        self._activity_tools_reflection_status = note_status
+        note_status.get_style_context().add_class('create-ai-meta-note')
+        note_status.set_xalign(0)
+        note_status.set_line_wrap(True)
+        reflection_box.pack_start(note_status, False, False, 0)
+        notes_box = Gtk.VBox(spacing=style.zoom(4))
+        self._activity_tools_notes_box = notes_box
+        reflection_box.pack_start(notes_box, False, False, 0)
+        content.pack_start(reflection, False, False, style.zoom(3))
+
+        health_toggle = Gtk.Button.new_with_label(_('Activity checks  ›'))
+        self._activity_tools_health_toggle = health_toggle
+        health_toggle.set_relief(Gtk.ReliefStyle.NONE)
+        health_toggle.get_style_context().add_class(
+            'create-ai-activity-tools-disclosure')
+        health_toggle.connect('clicked', self.__activity_tools_toggle_cb,
+                              'health')
+        content.pack_start(health_toggle, False, False, 0)
+        health_revealer = Gtk.Revealer()
+        self._activity_tools_health_revealer = health_revealer
+        health_box = Gtk.VBox(spacing=style.zoom(5))
+        self._activity_tools_health_box = health_box
+        health_revealer.add(health_box)
+        content.pack_start(health_revealer, False, False, 0)
+
+        code_toggle = Gtk.Button.new_with_label(_('Important code  ›'))
+        self._activity_tools_code_toggle = code_toggle
+        code_toggle.set_relief(Gtk.ReliefStyle.NONE)
+        code_toggle.get_style_context().add_class(
+            'create-ai-activity-tools-disclosure')
+        code_toggle.connect('clicked', self.__activity_tools_toggle_cb,
+                            'code')
+        content.pack_start(code_toggle, False, False, 0)
+        code_revealer = Gtk.Revealer()
+        self._activity_tools_code_revealer = code_revealer
+        code_revealer.add(sections)
+        content.pack_start(code_revealer, False, False, 0)
         page.show_all()
+        health_revealer.set_reveal_child(False)
+        code_revealer.set_reveal_child(False)
         return page
 
     def __activity_tools_choice_cb(self, button, page):
@@ -5842,12 +6021,29 @@ class CreateAIActivityPanel(Gtk.EventBox):
             target.grab_focus()
         return False
 
-    def __activity_tools_preset_cb(self, button, prompt):
+    def __activity_tools_preset_cb(self, button, label, prompt):
         if self._activity_tools_change_entry is not None:
-            self._activity_tools_change_entry.set_text(prompt)
-            self._activity_tools_change_entry.grab_focus()
+            self._activity_tools_change_entry.set_text('')
+        self._activity_tools_selected_preset = (label, prompt)
+        for candidate in self._activity_tools_preset_buttons:
+            candidate.get_style_context().remove_class(
+                'create-ai-activity-tools-action-selected')
+        button.get_style_context().add_class(
+            'create-ai-activity-tools-action-selected')
+        if self._activity_tools_selected_preset_label is not None:
+            self._activity_tools_selected_preset_label.set_text(
+                _('Selected: %s') % label)
+        self.__activity_tools_input_changed_cb(button)
 
     def __activity_tools_input_changed_cb(self, widget):
+        if widget is self._activity_tools_change_entry and \
+                self._activity_tools_change_entry.get_text().strip():
+            self._activity_tools_selected_preset = None
+            if self._activity_tools_selected_preset_label is not None:
+                self._activity_tools_selected_preset_label.set_text('')
+            for candidate in self._activity_tools_preset_buttons:
+                candidate.get_style_context().remove_class(
+                    'create-ai-activity-tools-action-selected')
         if self._activity_tools_reviewed_change is not None:
             self._invalidate_activity_tools_review(
                 _('The request or target changed. Review it again before '
@@ -5855,7 +6051,10 @@ class CreateAIActivityPanel(Gtk.EventBox):
 
     def _current_activity_tools_change(self):
         entry = self._activity_tools_change_entry
-        request = entry.get_text().strip() if entry is not None else ''
+        custom_request = entry.get_text().strip() if entry is not None else ''
+        preset = self._activity_tools_selected_preset
+        request = custom_request or (preset[1] if preset else '')
+        request_label = custom_request or (preset[0] if preset else '')
         selected = self._activity_tools_selected_target is not None and \
             self._activity_tools_selected_target.get_active() and \
             self._has_specific_live_edit_target()
@@ -5865,6 +6064,7 @@ class CreateAIActivityPanel(Gtk.EventBox):
             if isinstance(plan, dict) else ''
         return {
             'request': request,
+            'request_label': request_label,
             'source': 'preview' if selected else 'activity-tools',
             'target': target,
             'result_token': (id(self._generation_result), source_hash),
@@ -5909,7 +6109,7 @@ class CreateAIActivityPanel(Gtk.EventBox):
         self._activity_tools_change_summary.set_text(
             _('Change %(target)s:\n%(request)s\n\nThe current working '
               'version stays safe unless the new version passes its checks.')
-            % {'target': target, 'request': request})
+            % {'target': target, 'request': change['request_label']})
         self._activity_tools_reviewed_change = change
         self._activity_tools_confirmation_serial += 1
         serial = self._activity_tools_confirmation_serial
@@ -5986,6 +6186,11 @@ class CreateAIActivityPanel(Gtk.EventBox):
             self._sidebar_toggle_button.set_sensitive(
                 has_result and not self._has_active_generation_job())
         specific_target = self._has_specific_live_edit_target()
+        if self._activity_tools_selected_target_box is not None:
+            self._activity_tools_selected_target_box.set_no_show_all(
+                not (has_result and specific_target))
+            self._activity_tools_selected_target_box.set_visible(
+                has_result and specific_target)
         if self._activity_tools_selected_target is not None:
             self._activity_tools_selected_target.set_sensitive(
                 has_result and specific_target)
@@ -5998,8 +6203,38 @@ class CreateAIActivityPanel(Gtk.EventBox):
                 (_('Selected: %s') % self._live_edit_target)
                 if specific_target else
                 _('Select a preview part in Edit mode to target it here.'))
+        self._refresh_activity_tools_presets()
         self._invalidate_activity_tools_review_if_stale()
         self._refresh_activity_tools_understand()
+
+    def _refresh_activity_tools_presets(self):
+        grid = self._activity_tools_presets_grid
+        if grid is None:
+            return
+        result = self._generation_result
+        plan = result.plan if result is not None and \
+            isinstance(result.plan, dict) else {}
+        files = getattr(result, 'files', {}) if result is not None else {}
+        source = files.get('activity.py', '') if isinstance(files, dict) else ''
+        presets = _activity_tools_presets(plan, source)
+        labels = [label for label, prompt in presets]
+        current_labels = [button.get_label()
+                          for button in self._activity_tools_preset_buttons]
+        if labels == current_labels:
+            return
+        self._clear_box(grid)
+        self._activity_tools_preset_buttons = []
+        self._activity_tools_selected_preset = None
+        if self._activity_tools_selected_preset_label is not None:
+            self._activity_tools_selected_preset_label.set_text('')
+        for index, (label, prompt) in enumerate(presets):
+            button = self._create_activity_tools_action_button(label)
+            button.connect('clicked', self.__activity_tools_preset_cb,
+                           label, prompt)
+            button.set_hexpand(True)
+            grid.attach(button, 0, index, 1, 1)
+            self._activity_tools_preset_buttons.append(button)
+        grid.show_all()
 
     def _clear_box(self, box):
         if box is None:
@@ -6033,6 +6268,8 @@ class CreateAIActivityPanel(Gtk.EventBox):
             return
         self._clear_box(overview)
         self._clear_box(sections_box)
+        self._clear_box(self._activity_tools_health_box)
+        self._clear_box(self._activity_tools_notes_box)
         result = self._generation_result
         if result is None:
             overview.pack_start(self._activity_tools_info_card(
@@ -6045,22 +6282,15 @@ class CreateAIActivityPanel(Gtk.EventBox):
         plan = result.plan if isinstance(result.plan, dict) else {}
         goal = plan.get('learner_goal') or plan.get('summary') or \
             getattr(result.spec, 'prompt', '')
-        behavior = plan.get('interaction_model') or \
-            _('The preview shows the activity’s learner interactions.')
-        steps = plan.get('learner_steps') or plan.get('classroom_flow') or []
-        if isinstance(steps, (list, tuple)):
-            steps_text = '\n'.join(
-                '%d. %s' % (index + 1, str(step))
-                for index, step in enumerate(steps[:5]))
-        else:
-            steps_text = str(steps)
         overview.pack_start(self._activity_tools_info_card(
-            _('What it teaches'), str(goal)), False, False, 0)
-        overview.pack_start(self._activity_tools_info_card(
-            _('What the learner does'), str(behavior)), False, False, 0)
-        if steps_text:
-            overview.pack_start(self._activity_tools_info_card(
-                _('Visible steps'), steps_text), False, False, 0)
+            _('Learning purpose'), str(goal)), False, False, 0)
+        for index, (title, prompt) in enumerate(zip(
+                (_('1 · Try'), _('2 · Notice'), _('3 · Think')),
+                _activity_reflection_prompts(plan))):
+            card = self._activity_tools_info_card(title, prompt)
+            card.get_style_context().add_class(
+                'create-ai-activity-tools-reflection-step')
+            overview.pack_start(card, False, False, 0)
 
         source = ''
         files = getattr(result, 'files', None)
@@ -6114,8 +6344,123 @@ class CreateAIActivityPanel(Gtk.EventBox):
             button.connect(
                 'clicked', self.__activity_tools_code_section_cb, section)
             sections_box.pack_start(button, False, False, 0)
+        for label, status in _activity_health_rows(plan):
+            row = Gtk.HBox(spacing=style.zoom(6))
+            row.get_style_context().add_class(
+                'create-ai-activity-tools-health-row')
+            name = Gtk.Label(label)
+            name.set_xalign(0)
+            row.pack_start(name, True, True, style.zoom(6))
+            value = Gtk.Label(status)
+            value.get_style_context().add_class(
+                'create-ai-activity-tools-health-status')
+            row.pack_end(value, False, False, style.zoom(6))
+            self._activity_tools_health_box.pack_start(
+                row, False, False, 0)
+        for note in self._get_activity_tools_reflections():
+            text = str(note.get('content', '')).strip()
+            if text:
+                self._activity_tools_notes_box.pack_start(
+                    self._activity_tools_info_card(_('Saved for this version'),
+                                                   text), False, False, 0)
         overview.show_all()
         sections_box.show_all()
+        if self._activity_tools_health_box is not None:
+            self._activity_tools_health_box.show_all()
+        if self._activity_tools_notes_box is not None:
+            self._activity_tools_notes_box.show_all()
+
+    def __activity_tools_toggle_cb(self, button, section):
+        revealer = (self._activity_tools_health_revealer
+                    if section == 'health' else
+                    self._activity_tools_code_revealer)
+        if revealer is None:
+            return
+        reveal = not revealer.get_reveal_child()
+        revealer.set_reveal_child(reveal)
+        title = _('Activity checks') if section == 'health' else \
+            _('Important code')
+        button.set_label('%s  %s' % (title, '⌄' if reveal else '›'))
+
+    def _activity_tools_reflection_value(self):
+        view = self._activity_tools_reflection_text
+        if view is None:
+            return ''
+        buffer_ = view.get_buffer()
+        return buffer_.get_text(
+            buffer_.get_start_iter(), buffer_.get_end_iter(), True).strip()
+
+    def __activity_tools_starter_cb(self, button, starter):
+        view = self._activity_tools_reflection_text
+        if view is None:
+            return
+        buffer_ = view.get_buffer()
+        text = self._activity_tools_reflection_value()
+        buffer_.set_text((text + '\n' if text else '') + starter + ' ')
+        view.grab_focus()
+        buffer_.place_cursor(buffer_.get_end_iter())
+
+    def _activity_tools_revision_key(self):
+        if self._aod_active_revision_id:
+            return self._aod_active_revision_id
+        plan = getattr(self._generation_result, 'plan', {})
+        return str(plan.get('source_hash', 'current')) \
+            if isinstance(plan, dict) else 'current'
+
+    def _get_activity_tools_reflections(self):
+        key = self._activity_tools_revision_key()
+        if self._aod_session_id and self._aod_active_revision_id:
+            try:
+                from service.service import get_service
+                return get_service().get_reflections(
+                    self._aod_session_id, self._aod_active_revision_id)
+            except Exception:
+                logging.exception('Could not load Activity Tools notes')
+        return [dict(item) for item in
+                self._activity_tools_reflection_notes.get(key, [])]
+
+    def __activity_tools_save_note_cb(self, button):
+        text = self._activity_tools_reflection_value()
+        if not text:
+            self._activity_tools_reflection_status.set_text(
+                _('Write an observation first.'))
+            return
+        saved = None
+        if self._aod_session_id and self._aod_active_revision_id:
+            try:
+                from service.service import get_service
+                saved = get_service().save_reflection(
+                    self._aod_session_id, self._aod_active_revision_id, text)
+            except Exception:
+                logging.exception('Could not save Activity Tools note')
+        if saved is None:
+            key = self._activity_tools_revision_key()
+            saved = {'content': text, 'created_at': time.time()}
+            self._activity_tools_reflection_notes.setdefault(key, []).append(
+                saved)
+        self._activity_tools_reflection_status.set_text(
+            _('Saved with this activity version.'))
+        self._activity_tools_reflection_text.get_buffer().set_text('')
+        self._refresh_activity_tools_understand()
+
+    def __activity_tools_note_to_change_cb(self, button):
+        text = self._activity_tools_reflection_value()
+        if not text:
+            self._activity_tools_reflection_status.set_text(
+                _('Write an observation first.'))
+            return
+        prompt = (_('Improve the existing activity based on this learner '
+                    'observation: “%(note)s”. Diagnose the underlying cause, '
+                    'make the smallest complete fix, and keep the rest of '
+                    'the activity working.') % {'note': text})
+        if self._activity_tools_change_entry is not None:
+            self._activity_tools_change_entry.set_text('')
+        self._activity_tools_selected_preset = (
+            _('From your observation'), prompt)
+        if self._activity_tools_selected_preset_label is not None:
+            self._activity_tools_selected_preset_label.set_text(
+                _('Selected: From your observation'))
+        self._show_activity_tools_page('change')
 
     def __activity_tools_code_section_cb(self, button, section):
         self._set_activity_tools_open(False)
@@ -10899,6 +11244,9 @@ if clipboard.wait_is_text_available():
             if self._studio_right_panel is not None:
                 self._studio_right_panel.show_all()
             revealer.set_reveal_child(True)
+            # Recalculate after the overlay is mapped; the preview allocation
+            # may have settled since the first pre-map measurement.
+            GObject.idle_add(self._resize_activity_tools_drawer)
             if self._activity_tools_close_button is not None:
                 GObject.idle_add(self._focus_activity_tools_close)
         else:

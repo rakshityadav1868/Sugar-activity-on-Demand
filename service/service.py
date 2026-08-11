@@ -207,6 +207,13 @@ class AODService:
     def list_sessions(self):
         return self._session_store.list_sessions()
 
+    def save_reflection(self, session_id, revision_id, content):
+        return self._session_store.append_reflection(
+            session_id, revision_id, content)
+
+    def get_reflections(self, session_id, revision_id):
+        return self._session_store.get_reflections(session_id, revision_id)
+
     def cancel_job(self, job_id):
         with self._lock:
             job = self._jobs.get(job_id)

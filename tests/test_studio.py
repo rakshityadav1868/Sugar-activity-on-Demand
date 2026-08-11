@@ -50,6 +50,35 @@ def _gtk_display_available():
 
 class TestStudioDecoupling(unittest.TestCase):
 
+    def test_activity_tools_presets_follow_activity_capabilities(self):
+        from ui.panel import _activity_tools_presets
+        quiz = [label for label, prompt in _activity_tools_presets({
+            'template': 'quiz', 'summary': 'A scored challenge'})]
+        generic = [label for label, prompt in _activity_tools_presets({
+            'template': 'tool', 'summary': 'A simple counter'})]
+        self.assertIn('Adjust challenge', quiz)
+        self.assertNotIn('Add a level', generic)
+        self.assertIn('Fix a problem', generic)
+
+    def test_activity_tools_health_does_not_invent_runtime_success(self):
+        from ui.panel import _activity_health_rows
+        rows = dict(_activity_health_rows({
+            'verification_status': 'passed',
+            'runtime_check': 'skipped: disabled',
+            'critic': 'ok',
+        }))
+        self.assertEqual('Passed', rows['Code checks'])
+        self.assertEqual('Skipped', rows['Activity launch'])
+        self.assertEqual('Skipped', rows['Journal save test'])
+        self.assertEqual('Passed', rows['Model review'])
+
+    def test_reflection_prompts_are_activity_specific(self):
+        from ui.panel import _activity_reflection_prompts
+        prompts = _activity_reflection_prompts({
+            'template': 'game', 'summary': 'Swim around obstacles'})
+        self.assertIn('round', prompts[0].lower())
+        self.assertIn('score', prompts[1].lower())
+
     def test_learning_area_cards_use_bundled_sugar_artwork(self):
         from ui.panel import _learning_area_icon_kwargs
 
@@ -1187,7 +1216,7 @@ assert panel._activity_tools_stack.get_visible_child_name() == 'home'
 home_labels = all_label_text(
     panel._activity_tools_stack.get_child_by_name('home'))
 assert 'Change this activity' in home_labels, home_labels
-assert 'See how it works' in home_labels, home_labels
+assert 'Understand & reflect' in home_labels, home_labels
 assert 'The activity keeps running safely.' in home_labels, home_labels
 assert 'Fix a problem' not in home_labels, home_labels
 assert 'Challenges' not in home_labels, home_labels
@@ -1263,9 +1292,27 @@ overview = panel._activity_tools_understand_overview.get_children()
 sections = panel._activity_tools_understand_sections.get_children()
 assert len(overview) >= 2, 'overview cards: %d' % len(overview)
 assert len(sections) >= 5, 'code sections: %d' % len(sections)
+assert not panel._activity_tools_code_revealer.get_reveal_child()
+assert not panel._activity_tools_health_revealer.get_reveal_child()
+panel._activity_tools_code_toggle.clicked()
+assert panel._activity_tools_code_revealer.get_reveal_child()
 
-# A quick change fills the request, then the learner must review a summary
-# before anything is submitted.
+# A reflection can be kept with this revision or turned into a reviewed
+# change without exposing the generated machine prompt in the text field.
+panel._activity_tools_reflection_text.get_buffer().set_text(
+    'I got stuck when the answer feedback disappeared.')
+panel._CreateAIActivityPanel__activity_tools_save_note_cb(None)
+assert panel._get_activity_tools_reflections()[0]['content'].startswith(
+    'I got stuck')
+panel._activity_tools_reflection_text.get_buffer().set_text(
+    'I would change the answer feedback.')
+panel._CreateAIActivityPanel__activity_tools_note_to_change_cb(None)
+assert panel._activity_tools_stack.get_visible_child_name() == 'change'
+assert not panel._activity_tools_change_entry.get_text()
+assert panel._activity_tools_selected_preset[0] == 'From your observation'
+
+# A capability-aware quick change stays human-readable while its complete
+# request remains internal, then the learner reviews before submission.
 panel._show_activity_tools_page('change')
 pump()
 change_page = panel._activity_tools_stack.get_child_by_name('change')
@@ -1273,10 +1320,12 @@ panel._activity_tools_change_confirm.set_transition_duration(0)
 make_harder = next(
     widget for widget in walk(change_page)
     if isinstance(widget, Gtk.Button) and
-    widget.get_label() == 'Make it harder')
+    widget.get_label() == 'Adjust challenge')
 assert make_harder.get_allocated_height() >= 45
 make_harder.clicked()
-assert panel._activity_tools_change_entry.get_text()
+assert not panel._activity_tools_change_entry.get_text()
+assert panel._activity_tools_selected_preset_label.get_text() == \
+    'Selected: Adjust challenge'
 panel._CreateAIActivityPanel__activity_tools_plan_change_cb(None)
 pump()
 assert panel._activity_tools_change_confirm.get_reveal_child()
@@ -1296,7 +1345,7 @@ assert window.get_focus() is panel._activity_tools_change_entry
 # The revealed confirmation is brought into view on the constrained layout.
 panel._focus_activity_tools_confirmation(
     panel._activity_tools_confirmation_serial)
-adjustment = change_page.get_vadjustment()
+adjustment = panel._activity_tools_change_scroll.get_vadjustment()
 confirm_alloc = panel._activity_tools_change_confirm.get_allocation()
 assert adjustment.get_value() > 0, adjustment.get_value()
 assert confirm_alloc.y + confirm_alloc.height <= \

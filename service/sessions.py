@@ -81,6 +81,7 @@ class AODRevision:
     prompt: str
     result_summary: dict
     parent_revision_id: str = ''
+    reflections: list = field(default_factory=list)
     created_at: float = field(default_factory=time.time)
 
     @classmethod
@@ -102,6 +103,7 @@ class AODRevision:
             prompt=data.get('prompt', ''),
             result_summary=data.get('result_summary', {}),
             parent_revision_id=data.get('parent_revision_id', ''),
+            reflections=list(data.get('reflections') or []),
             created_at=data.get('created_at', time.time()),
         )
 
@@ -112,6 +114,7 @@ class AODRevision:
             'prompt': self.prompt,
             'result_summary': self.result_summary,
             'parent_revision_id': self.parent_revision_id,
+            'reflections': list(self.reflections),
             'created_at': self.created_at,
         }
 
@@ -263,6 +266,34 @@ class AODSessionStore:
             session.messages.append(message)
             self.save(session)
             return session
+
+    def append_reflection(self, session_id, revision_id, content):
+        """Attach a private learner note to the revision it describes."""
+        text = str(content or '').strip()
+        if not text:
+            return None
+        with self._lock:
+            session = self.load(session_id)
+            if session is None:
+                return None
+            for revision in session.revisions:
+                if revision.revision_id != revision_id:
+                    continue
+                note = {'content': text, 'created_at': time.time()}
+                revision.reflections.append(note)
+                revision.reflections = revision.reflections[-50:]
+                self.save(session)
+                return dict(note)
+        return None
+
+    def get_reflections(self, session_id, revision_id):
+        session = self.load(session_id)
+        if session is None:
+            return []
+        for revision in session.revisions:
+            if revision.revision_id == revision_id:
+                return [dict(item) for item in revision.reflections]
+        return []
 
     def _session_path(self, session_id):
         safe_id = ''.join(

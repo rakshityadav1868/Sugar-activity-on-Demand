@@ -1374,6 +1374,73 @@ _CSS_TEMPLATE = '''
             button.create-ai-activity-tools-action-primary label {
                 color: %(accent_text)s;
             }
+            button.create-ai-activity-tools-action-selected {
+                border: 2px solid %(accent_violet)s;
+                background-color: %(violet_soft)s;
+                color: %(toolbar)s;
+            }
+            button.create-ai-activity-tools-action-selected label {
+                color: %(toolbar)s;
+            }
+            .create-ai-activity-tools-selection {
+                color: %(accent_violet)s;
+                font-size: 11px;
+                font-weight: 700;
+            }
+            .create-ai-activity-tools-reflection {
+                border-radius: 14px;
+                border: 1px solid %(studio_lavender_border)s;
+                background-color: %(studio_lavender_soft)s;
+            }
+            .create-ai-activity-tools-card-title {
+                color: %(toolbar)s;
+                font-size: 14px;
+                font-weight: 700;
+            }
+            .create-ai-activity-tools-reflection-step {
+                border-left: 4px solid %(accent_violet)s;
+            }
+            button.create-ai-activity-tools-starter {
+                border-radius: 999px;
+                border: 1px solid %(studio_edge)s;
+                background-image: none;
+                background-color: %(studio_surface)s;
+                color: %(toolbar)s;
+                padding: 4px 6px;
+                font-size: 9px;
+                min-height: 30px;
+            }
+            textview.create-ai-activity-tools-note,
+            textview.create-ai-activity-tools-note text {
+                background-color: %(studio_surface)s;
+                color: %(toolbar)s;
+                caret-color: %(toolbar)s;
+                padding: 7px;
+            }
+            button.create-ai-activity-tools-disclosure {
+                border: 0;
+                border-top: 1px solid %(studio_edge)s;
+                background-image: none;
+                background-color: transparent;
+                color: %(toolbar)s;
+                font-weight: 700;
+                padding: 9px 2px;
+                min-height: 38px;
+            }
+            button.create-ai-activity-tools-disclosure label {
+                color: %(toolbar)s;
+            }
+            .create-ai-activity-tools-health-row {
+                border-radius: 8px;
+                background-color: %(studio_surface)s;
+                color: %(toolbar)s;
+                min-height: 34px;
+            }
+            .create-ai-activity-tools-health-status {
+                color: %(inactive_stroke)s;
+                font-size: 11px;
+                font-weight: 700;
+            }
             .create-ai-learning-counts {
                 border-radius: 999px;
                 border: 1px solid %(studio_edge)s;

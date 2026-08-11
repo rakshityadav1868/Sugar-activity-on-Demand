@@ -22,6 +22,7 @@ from service.jobs import STATUS_FAILED
 from service.jobs import STATUS_FINISHED
 from service.jobs import STATUS_GENERATING
 from service.sessions import AODSessionStore
+from service.sessions import AODRevision
 from service.sessions import ROLE_ASSISTANT
 from service.sessions import ROLE_USER
 from service.sessions import TYPE_RESULT
@@ -102,6 +103,24 @@ class TestAodService(unittest.TestCase):
         self.service.watch('job-id', observer.callback)
         self.service.unwatch('job-id', observer.callback)
         self.assertNotIn('job-id', self.service._callbacks)
+
+    def test_reflection_is_saved_only_on_its_activity_revision(self):
+        spec = ActivitySpec('Reflect', 'Try it.', 'games', 'MIT')
+        session = self.session_store.create_session(spec)
+        first = AODRevision.create('job-1', 'first', {})
+        second = AODRevision.create('job-2', 'second', {})
+        self.session_store.append_revision(session.session_id, first)
+        self.session_store.append_revision(session.session_id, second)
+
+        saved = self.service.save_reflection(
+            session.session_id, first.revision_id, 'I noticed a pause.')
+
+        self.assertEqual('I noticed a pause.', saved['content'])
+        self.assertEqual([], self.service.get_reflections(
+            session.session_id, second.revision_id))
+        restored = self.service.get_reflections(
+            session.session_id, first.revision_id)
+        self.assertEqual('I noticed a pause.', restored[0]['content'])
 
     def test_repair_state_is_persisted_without_losing_original_source(self):
         spec = ActivitySpec(
