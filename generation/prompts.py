@@ -5,6 +5,7 @@
 import json
 
 from generation.rag import get_api_reference
+from generation.rag import get_ui_design_reference
 
 
 def build_system_prompt(spec, references=()):
@@ -42,30 +43,62 @@ def build_system_prompt(spec, references=()):
         '8. If the learner request contains a current activity.py excerpt, '
         'treat it as an iterative refinement: preserve the working activity '
         'and change only what the refinement asks for.\n'
-        '9. Combine every selected learning area and respect the age band '
-        'and license.\n\n'
-        '%s\n\n'
-        'SELECTED LEARNING DIRECTION\n%s\n\n'
+        '9. Selected learning-area cards are discovery/RAG hints, not feature '
+        'requirements. Never inject math problems, quizzes, vocabulary, '
+        'assessment, reflection, explanations, classroom roles, or other '
+        'curriculum unless the learner request, confirmed answers, or '
+        'reference image explicitly asks for it. Respect the age band and '
+        'license without changing the requested activity.\n'
+        '10. Plan the complete interface using the Sugar whole-interface '
+        'contract below. Do not plan a generic card grid, web dashboard, or '
+        'permanent sidebar by default.\n'
+        '11. A reference-image brief describes activity content and settled '
+        'visual decisions, not a license to copy browser/editor chrome. '
+        'Use this strict priority: explicit learner request first; visible '
+        'reference decisions inside the target activity second; Sugar-native '
+        'adaptation only for host chrome and details not settled by the image; '
+        'generic layout preferences last. Preserve every visible functional '
+        'region and control one-for-one, including approximate proportions, '
+        'alignment, ordering, color relationships, state, and relative '
+        'left/center/right placement. Do not omit, merge, move, or redesign a '
+        'target region just to make it look more Sugar-native. Relocate or '
+        'omit only browser, editor, Studio, export, and other host controls '
+        'listed as Ignore regions.\n\n'
+        '%s\n\n%s\n\n'
+        'OPTIONAL DISCOVERY DIRECTION (DO NOT FORCE INTO FEATURES)\n%s\n\n'
         'RETRIEVED SUGAR REFERENCES\n%s\n\n'
         'Return these JSON fields:\n'
         '- name: short activity name\n'
-        '- template: closest reference family: canvas, carrom, chess, grid, '
-        'narrative, quiz, or utility\n'
+        '- template: closest implementation/reference family: canvas, '
+        'carrom, chess, grid, narrative, quiz, or utility. This is metadata '
+        'only and must never replace or alter the requested mechanics.\n'
         '- activity_kind: the specific kind of activity to build, in your '
         'own words\n'
         '- summary: one sentence\n'
-        '- learner_goal: one observable learner goal\n'
-        '- learner_steps: 3 to 5 short steps\n'
+        '- learner_goal: the concrete activity/play/use goal; educational '
+        'only when explicitly requested\n'
+        '- learner_steps: 3 to 5 short steps for using or playing it\n'
         '- interaction_model: how learners interact with the activity\n'
-        '- ui_regions: 3 to 6 visible interface regions or controls\n'
+        '- ui_regions: 3 to 6 Sugar regions, identifying the dominant learner '
+        'workspace and any truly persistent panel\n'
+        '- toolbar_actions: primary actions that belong in the main toolbar\n'
+        '- palette_actions: secondary or contextual actions that belong in '
+        'Sugar palettes or sub-toolbars\n'
+        '- feedback_model: visible selection, progress, success, error, and '
+        'empty-state feedback\n'
+        '- color_model: grayscale activity chrome, meaningful content color, '
+        'and any learner/XO color ownership\n'
+        '- responsive_behavior: how the workspace dominates at 1024x768 and '
+        '1200x900 without clipping\n'
         '- state_schema: short description of the data saved to the Journal\n'
         '- word_bank: up to 8 useful words\n'
-        '- features: optional list of activity features teachers can inspect\n'
-        '- classroom_flow: optional 3 to 5 step classroom use flow\n'
-        '- teacher_notes: optional short facilitation notes\n'
-        '- assessment_prompts: optional reflection/check-for-understanding '
-        'prompts\n'
-        '- materials: optional short list of classroom materials\n'
+        '- features: 3 to 6 concrete, request-specific mechanics visible in '
+        'the finished activity. Never copy generic features from the closest '
+        'template family.\n'
+        '- classroom_flow: optional only when classroom use was requested\n'
+        '- teacher_notes: optional only when teacher facilitation was requested\n'
+        '- assessment_prompts: optional only when assessment was requested\n'
+        '- materials: optional only when physical materials were requested\n'
         '- refinement_notes: optional list of changes to preserve or apply '
         'when this is a refinement\n'
         '- chess_show_move_log: optional boolean for chess activities; false '
@@ -74,6 +107,7 @@ def build_system_prompt(spec, references=()):
         '- starter_text: optional opening text for narrative activities\n'
     ) % (
         get_api_reference(),
+        get_ui_design_reference(),
         learning_direction,
         reference_text or 'No external examples were retrieved.',
     )
@@ -130,29 +164,28 @@ def _format_references(references):
 
 _CATEGORY_BLOCKS = {
     'logic_math': (
-        'Favor patterns, reasoning, explanation, immediate feedback, and '
-        'multiple ways to reach or describe an answer.'
+        'Use this only to retrieve useful examples. Add patterns, reasoning, '
+        'or answers only when the activity request itself calls for them.'
     ),
     'science': (
-        'Favor observing, predicting, experimenting, measuring, and '
-        'comparing results, with simple simulations or data the learner '
-        'can change and re-run.'
+        'Use this only to retrieve useful examples. Add experiments, '
+        'measurements, or science content only when explicitly requested.'
     ),
     'language': (
-        'Favor reading, writing, vocabulary, storytelling, and word play, '
-        'with feedback that celebrates expression and revision.'
+        'Use this only to retrieve useful examples. Add vocabulary, reading, '
+        'or writing mechanics only when explicitly requested.'
     ),
     'tools_utils': (
-        'Favor a focused tool that helps learners measure, organize, count, '
-        'compare, or investigate something meaningful.'
+        'Use this only to retrieve useful examples. Build the exact utility '
+        'described by the activity request.'
     ),
     'games': (
         'Favor a clear play loop, visible goals, understandable state, and '
         'feedback that supports experimentation instead of punishment.'
     ),
     'creation': (
-        'Favor drawing, writing, composing, building, and learner-owned '
-        'artifacts that can be revised and shared.'
+        'When the request is creative, favor direct creation controls and a '
+        'learner-owned artifact that can be revised and saved.'
     ),
 }
 
