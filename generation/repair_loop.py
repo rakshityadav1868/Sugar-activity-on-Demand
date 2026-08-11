@@ -94,6 +94,21 @@ def build_repair_system_prompt():
         '- Preserve working behavior and the GeneratedActivity class.\n'
         '- Preserve Sugar safety constraints: no networking, subprocesses, '
         'or unrestricted filesystem access.\n'
+        '- Use style.GRID_CELL_SIZE exactly; style.grid_size does not exist. '
+        'Sugar ToolButton/RadioToolButton wrappers use set_tooltip(...), '
+        'while raw Gtk.ToolButton/ToggleToolButton/RadioToolButton widgets '
+        'use set_tooltip_text(...). Prefer the sugar3 graphics wrappers for '
+        'activity toolbar chrome.\n'
+        '- Preserve Sugar-native whole-interface structure: dominant work '
+        'canvas, purposeful Sugar toolbar/palette controls, theme colors and '
+        'spacing, compact necessary panels, and responsive allocation. Do '
+        'not repair a defect by adding generic cards, brand styling, or a '
+        'permanent dashboard.\n'
+        '- If the request or repair goal contains a Reference image brief, '
+        'its visible target layout wins over generic composition preferences. '
+        'Do not omit, merge, move, resize, or restyle a reference-settled '
+        'target region while fixing an unrelated validation/runtime defect. '
+        'Sugarize only host chrome and details the reference does not settle.\n'
     )
 
 

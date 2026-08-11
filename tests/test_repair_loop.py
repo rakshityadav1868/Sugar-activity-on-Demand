@@ -403,6 +403,7 @@ class TestRepairLoop(unittest.TestCase):
         prompt = build_repair_system_prompt()
         self.assertIn('Never return FULLREGEN', prompt)
         self.assertIn('never return a complete activity.py', prompt)
+        self.assertIn('Sugar-native whole-interface', prompt)
 
     def test_goal_is_stated_in_the_repair_prompt(self):
         provider = _Provider([_patch(
