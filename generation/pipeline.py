@@ -20,11 +20,14 @@ from generation.generator import apply_license_to_project
 from generation.generator import build_plan
 from generation.generator import create_prototype_activity
 from generation.generator import enrich_plan
+from generation.generator import infer_template
 from generation.generator import normalize_plan
 from generation.generator import package_project
 from generation.generator import read_project_files
 from generation.icons import request_icon_svg
+from generation.known_repairs import apply_known_api_repairs
 from llm.providers import ProviderError
+from llm.providers import ProviderImageUnsupportedError
 from llm.providers import get_configured_provider
 from generation.prompts import build_system_prompt
 from generation.prompts import build_user_prompt
@@ -34,7 +37,9 @@ from generation.refine import build_refine_system_prompt
 from generation.refine import build_refine_user_prompt
 from generation.refine import parse_search_replace
 from generation.refine import apply_patches
+from generation.refine import validate_refinement_result
 from generation.repair_loop import RepairCheckResult
+from generation.repair_loop import RepairResult
 from generation.repair_loop import patches_match_uniquely
 from generation.repair_loop import patches_replace_whole_file
 from generation.repair_loop import repair_candidate
@@ -77,7 +82,8 @@ def generate_activity(spec, output_root=None, provider=None,
                       validate_code=True,
                       progress_cb=None, pace=False, package_bundle=True,
                       template_fallback=False, enhance=True,
-                      cancel_check=None):
+                      cancel_check=None, reference_image_data=None,
+                      reference_image_mime_type=''):
     """Run prompt grounding, provider planning, and generation.
 
     ``template_fallback`` applies only when no provider candidate was produced
@@ -132,7 +138,7 @@ def generate_activity(spec, output_root=None, provider=None,
                 metadata={'enhanced_prompt': enhanced_text})
 
     progress.report('planning', 0.06,
-                    'Reading the prompt and classroom goal')
+                    'Reading the prompt and activity goal')
 
     if selected_provider is not None:
         use_rag = True
@@ -158,7 +164,7 @@ def generate_activity(spec, output_root=None, provider=None,
             reference_limit = 4
         corpus = build_corpus()
         references = search(
-            spec.prompt,
+            _rag_search_query(spec),
             limit=reference_limit,
             template=template_filter,
             corpus=corpus,
@@ -230,6 +236,15 @@ def generate_activity(spec, output_root=None, provider=None,
 
     plan = enrich_plan(spec, plan, references)
     plan = dict(plan)
+    reference_supplied = (
+        isinstance(reference_image_data, bytes)
+        and bool(reference_image_data)
+        and reference_image_mime_type in ('image/png', 'image/jpeg'))
+    # Persist only safe booleans for diagnosis. Reference pixels remain
+    # memory-only and are never written into the plan or session history.
+    plan['reference_image_supplied'] = reference_supplied
+    plan['reference_brief_supplied'] = (
+        'reference image brief' in (spec.prompt or '').lower())
     plan['provider'] = provider_used
     plan['model'] = model_used
     if prompt_was_enhanced:
@@ -249,6 +264,8 @@ def generate_activity(spec, output_root=None, provider=None,
             progress,
             validate_code=validate_code,
             cancel_check=cancel_check,
+            reference_image_data=reference_image_data,
+            reference_image_mime_type=reference_image_mime_type,
         )
         activity_source, code_error, code_attempts, repair_history, \
             failed_source = generated
@@ -286,6 +303,8 @@ def generate_activity(spec, output_root=None, provider=None,
                     plan,
                     activity_source,
                     warnings=accepted_report.warnings,
+                    reference_image_data=reference_image_data,
+                    reference_image_mime_type=reference_image_mime_type,
                 )
                 if activity_source != critic_source:
                     critic_event = {
@@ -394,6 +413,30 @@ def generate_activity(spec, output_root=None, provider=None,
     return result
 
 
+_RAG_INTERACTION_HINTS = {
+    'canvas': 'canvas cairo drawing direct manipulation pointer events',
+    'carrom': 'board game turns physics aim score',
+    'chess': 'board game legal moves turns state',
+    'grid': 'grid game keyboard controls animation loop state',
+    'narrative': 'text view editing writing journal state',
+    'quiz': 'questions answers feedback progress state',
+    'utility': 'input output controls immediate result state',
+}
+
+
+def _rag_search_query(spec):
+    """Add technical retrieval terms without changing the requested idea.
+
+    Natural-language briefs often describe mechanics without naming GTK or a
+    rendering family.  These terms help RAG retrieve useful implementation
+    patterns; the planner and code generator still receive the original brief
+    as the authority and may choose a different implementation family.
+    """
+    family = infer_template(spec)
+    hints = _RAG_INTERACTION_HINTS.get(family, '')
+    return '%s\n%s' % (spec.prompt, hints) if hints else spec.prompt
+
+
 def package_generation_result(result):
     """Build the XO bundle for an already generated project."""
     if result.bundle_path and os.path.isfile(result.bundle_path):
@@ -441,6 +484,70 @@ def reapply_generation_license(result, license_id, activity_name=None):
     source = result.files.get('activity.py', '')
     if source:
         result.plan['source_hash'] = _source_hash(source)
+    plan_path = os.path.join(result.project_path, 'aod_plan.json')
+    with open(plan_path, 'w', encoding='utf-8') as plan_file:
+        json.dump(result.plan, plan_file, indent=2, sort_keys=True)
+        plan_file.write('\n')
+    result.files = read_project_files(result.project_path)
+    result.bundle_path = ''
+    return result
+
+
+def apply_generation_install_options(result, activity_name, license_id,
+                                     icon_svg=None,
+                                     stroke_color='#282828',
+                                     fill_color='#FFFFFF',
+                                     icon_source=None):
+    """Persist the identity choices made immediately before installation.
+
+    Name and license reuse the existing metadata/license rewrite.  The icon
+    is sanitized again, recolored through Sugar's SVG entities, written to
+    the project, and recorded in ``aod_plan.json`` so every later package or
+    refinement keeps the same learner-approved identity.
+    """
+    from generation.icons import recolor_icon_svg
+    from generation.icons import render_activity_icon
+    from generation.icons import sanitize_icon_svg
+
+    name = ' '.join(str(activity_name or '').split())
+    if not name:
+        raise ValueError('Activity name is required.')
+    if len(name) > 80:
+        raise ValueError('Activity name must be 80 characters or fewer.')
+
+    candidate = icon_svg
+    if not candidate:
+        icon_path = os.path.join(
+            result.project_path, 'activity', 'activity.svg')
+        try:
+            with open(icon_path, encoding='utf-8') as icon_file:
+                candidate = icon_file.read()
+        except OSError:
+            candidate = ''
+    safe_icon = sanitize_icon_svg(candidate)
+    if safe_icon is None:
+        icon_plan = dict(result.plan)
+        icon_plan['name'] = name
+        safe_icon = sanitize_icon_svg(render_activity_icon(icon_plan))
+    colored_icon = recolor_icon_svg(
+        safe_icon, stroke_color, fill_color)
+    if colored_icon is None:
+        raise ValueError('The selected activity icon or colors are invalid.')
+
+    reapply_generation_license(
+        result, license_id, activity_name=name)
+    result.plan['name'] = name
+    result.plan['icon_svg'] = safe_icon
+    result.plan['icon_stroke_color'] = stroke_color.upper()
+    result.plan['icon_fill_color'] = fill_color.upper()
+    if icon_source:
+        result.plan['icon_source'] = str(icon_source)
+
+    icon_path = os.path.join(
+        result.project_path, 'activity', 'activity.svg')
+    with open(icon_path, 'w', encoding='utf-8') as icon_file:
+        icon_file.write(colored_icon)
+
     plan_path = os.path.join(result.project_path, 'aod_plan.json')
     with open(plan_path, 'w', encoding='utf-8') as plan_file:
         json.dump(result.plan, plan_file, indent=2, sort_keys=True)
@@ -567,7 +674,8 @@ _CODE_SIZE_TOKENS = {
 
 def _generate_activity_source_with_provider(
         provider, spec, plan, references, progress, validate_code=True,
-        cancel_check=None):
+        cancel_check=None, reference_image_data=None,
+        reference_image_mime_type=''):
     generate_source = getattr(provider, 'generate_activity_source', None)
     if not callable(generate_source):
         return None, '', 0, [], ''
@@ -589,6 +697,8 @@ def _generate_activity_source_with_provider(
             user_prompt,
             stream_callback,
             max_output_tokens,
+            reference_image_data=reference_image_data,
+            reference_image_mime_type=reference_image_mime_type,
         )
     except ProviderError as error:
         generation_error = _redact_provider_error(error, provider)
@@ -690,7 +800,9 @@ def _generate_activity_source_with_provider(
 
 def _request_initial_activity_source(generate_source, system_prompt,
                                      user_prompt, stream_callback,
-                                     max_output_tokens):
+                                     max_output_tokens,
+                                     reference_image_data=None,
+                                     reference_image_mime_type=''):
     """Call a provider once without masking provider-internal TypeErrors."""
     kwargs = {}
     try:
@@ -714,10 +826,61 @@ def _request_initial_activity_source(generate_source, system_prompt,
                 token_parameter is not None and
                 token_parameter.kind != inspect.Parameter.POSITIONAL_ONLY):
             kwargs['max_output_tokens'] = max_output_tokens
-    return generate_source(system_prompt, user_prompt, **kwargs)
+        _add_optional_reference_kwargs(
+            kwargs, parameters, accepts_kwargs,
+            reference_image_data, reference_image_mime_type)
+    try:
+        return generate_source(system_prompt, user_prompt, **kwargs)
+    except ProviderImageUnsupportedError:
+        # The analyzed text brief is already part of user_prompt, so a route
+        # that unexpectedly rejects pixels can still generate reliably.
+        kwargs.pop('image_data', None)
+        kwargs.pop('image_mime_type', None)
+        return generate_source(system_prompt, user_prompt, **kwargs)
 
 
-def _check_activity_candidate(source, spec, plan):
+def _add_optional_reference_kwargs(kwargs, parameters, accepts_kwargs,
+                                   image_data, mime_type):
+    if not isinstance(image_data, bytes) or not image_data or \
+            mime_type not in ('image/png', 'image/jpeg'):
+        return
+    for name, value in (
+            ('image_data', image_data), ('image_mime_type', mime_type)):
+        parameter = parameters.get(name)
+        if accepts_kwargs or (
+                parameter is not None and
+                parameter.kind != inspect.Parameter.POSITIONAL_ONLY):
+            kwargs[name] = value
+
+
+def _request_provider_text(generate_text, system_prompt, user_prompt,
+                           reference_image_data=None,
+                           reference_image_mime_type=''):
+    """Call raw text generation with optional in-memory reference pixels."""
+    kwargs = {}
+    try:
+        signature = inspect.signature(generate_text)
+    except (TypeError, ValueError):
+        signature = None
+    if signature is not None:
+        parameters = signature.parameters
+        accepts_kwargs = any(
+            parameter.kind == inspect.Parameter.VAR_KEYWORD
+            for parameter in parameters.values()
+        )
+        _add_optional_reference_kwargs(
+            kwargs, parameters, accepts_kwargs,
+            reference_image_data, reference_image_mime_type)
+    try:
+        return generate_text(system_prompt, user_prompt, **kwargs)
+    except ProviderImageUnsupportedError:
+        kwargs.pop('image_data', None)
+        kwargs.pop('image_mime_type', None)
+        return generate_text(system_prompt, user_prompt, **kwargs)
+
+
+def _check_activity_candidate(source, spec, plan, refinement_parent=None,
+                              refinement_request=''):
     """Return a structured, stage-aware acceptance result for one source."""
     try:
         report = validate_activity_source_for_request(source, spec, plan)
@@ -734,6 +897,17 @@ def _check_activity_candidate(source, spec, plan):
             'errors': list(report.errors),
             'warnings': list(report.warnings),
         }
+
+    if refinement_parent is not None:
+        refinement_errors = validate_refinement_result(
+            refinement_parent, source, refinement_request)
+        if refinement_errors:
+            return False, {
+                'stage': 'refinement_validation',
+                'errors': refinement_errors,
+                'warnings': list(report.warnings),
+                'refinement_request': refinement_request,
+            }
 
     runtime_ok, runtime_detail = run_runtime_check(
         source, getattr(spec, 'name', 'Generated Activity'))
@@ -764,7 +938,7 @@ def _check_activity_candidate(source, spec, plan):
 
 def _repair_existing_source(provider, spec, plan, source, diagnostics,
                             progress, validate_code=True, goal='',
-                            cancel_check=None):
+                            cancel_check=None, refinement_parent=None):
     """Patch one existing source transactionally; never generate a new one.
 
     ``goal`` is forwarded to the repair prompt so a rejected refinement can be
@@ -772,6 +946,61 @@ def _repair_existing_source(provider, spec, plan, source, diagnostics,
     lets a caller stop the loop promptly on cancellation.
     """
     diagnostics = _redact_repair_value(diagnostics, provider)
+    original_source = source
+    original_hash = _source_hash(source)
+    source, known_repairs = apply_known_api_repairs(source)
+    known_event = None
+    if known_repairs:
+        if validate_code:
+            known_passed, diagnostics = _check_activity_candidate(
+                source, spec, plan,
+                refinement_parent=refinement_parent,
+                refinement_request=goal)
+        else:
+            known_passed = True
+            diagnostics = {
+                'stage': 'passed',
+                'errors': [],
+                'warnings': ['Validation disabled by caller.'],
+                'runtime_detail': 'skipped: validation disabled',
+            }
+        diagnostics = _redact_repair_value(diagnostics, provider)
+        known_event = {
+            'attempt': 0,
+            'outcome': (
+                'known_api_repairs_passed' if known_passed
+                else 'known_api_repairs_committed'),
+            'active_source_hash_before': original_hash,
+            'proposed_source_hash': _source_hash(source),
+            'active_source_hash_after': _source_hash(source),
+            'known_repairs': known_repairs,
+            'diagnostics': diagnostics,
+            'rolled_back': False,
+        }
+        progress.report_immediate(
+            'generating', 0.66,
+            ('Corrected known Sugar/GTK API mistakes in the saved draft' if
+             known_passed else
+             'Corrected known API mistakes; checking remaining issues'), {
+                'draft_activity_source': source,
+                'repair_event': known_event,
+                'repair_diagnostics': diagnostics,
+            })
+        if known_passed:
+            return RepairResult(
+                success=True,
+                source=source,
+                diagnostics=diagnostics,
+                reason='passed',
+                attempts=0,
+                history=[known_event],
+                snapshots={
+                    original_hash: original_source,
+                    _source_hash(source): source,
+                },
+                original_source_hash=original_hash,
+            )
+
     best = {
         'score': _diagnostic_score(diagnostics),
     }
@@ -779,7 +1008,9 @@ def _repair_existing_source(provider, spec, plan, source, diagnostics,
     def verify_candidate(candidate):
         if validate_code:
             passed, candidate_diagnostics = _check_activity_candidate(
-                candidate, spec, plan)
+                candidate, spec, plan,
+                refinement_parent=refinement_parent,
+                refinement_request=goal)
         else:
             passed = True
             candidate_diagnostics = {
@@ -819,7 +1050,7 @@ def _repair_existing_source(provider, spec, plan, source, diagnostics,
             {'repair_event': safe_event},
         )
 
-    return repair_candidate(
+    result = repair_candidate(
         provider,
         source,
         diagnostics,
@@ -829,6 +1060,11 @@ def _repair_existing_source(provider, spec, plan, source, diagnostics,
         goal=goal,
         cancel_check=cancel_check,
     )
+    if known_event is not None:
+        result.history.insert(0, known_event)
+        result.snapshots.setdefault(original_hash, original_source)
+        result.original_source_hash = original_hash
+    return result
 
 
 def _diagnostic_score(diagnostics):
@@ -897,11 +1133,24 @@ def _repair_event_message(event):
     return 'Repair attempt %d was rejected (%s)' % (attempt, outcome)
 
 
+def _actual_refinement_request(prompt):
+    """Extract the latest instruction from prompts saved by older UIs."""
+    text = (prompt or '').strip()
+    marker = '\nRefinement request:\n'
+    if marker in text:
+        extracted = text.rsplit(marker, 1)[-1].strip()
+        if extracted:
+            return extracted
+    return text
+
+
 def refine_activity(spec, current_source, current_plan, output_root,
                     provider=None, provider_name='default',
                     validate_code=True,
                     progress_cb=None, pace=False,
-                    package_bundle=False, cancel_check=None):
+                    package_bundle=False, cancel_check=None,
+                    reference_image_data=None,
+                    reference_image_mime_type=''):
     """Refine one existing activity.py without ever regenerating the file.
 
     The requested edit and any follow-up fixes are exact SEARCH/REPLACE
@@ -927,11 +1176,20 @@ def refine_activity(spec, current_source, current_plan, output_root,
     if output_root is None:
         output_root = env.get_profile_path(os.path.join('aod', 'projects'))
 
-    refinement_request = spec.prompt
+    # Older UI builds wrapped the real instruction in a large prompt that
+    # also contained the parent source and plan.  Accept those persisted jobs,
+    # but isolate the final teacher instruction so old context cannot dilute
+    # the edit or make request validation pass accidentally.
+    refinement_request = _actual_refinement_request(spec.prompt)
+    spec = replace(spec, prompt=refinement_request)
     plan_context = json.dumps({
         'template': current_plan.get('template', ''),
         'activity_kind': current_plan.get('activity_kind', ''),
+        'summary': current_plan.get('summary', ''),
         'interaction_model': current_plan.get('interaction_model', ''),
+        'features': current_plan.get('features', []),
+        'previous_refinements': current_plan.get(
+            'refinement_requests', [])[-5:],
     }, indent=2)
 
     progress.report('generating', 0.30,
@@ -948,13 +1206,16 @@ def refine_activity(spec, current_source, current_plan, output_root,
     refine_method = 'search_replace'
     if callable(generate_text):
         try:
-            response = generate_text(
+            response = _request_provider_text(
+                generate_text,
                 build_refine_system_prompt(),
                 build_refine_user_prompt(
                     current_source,
                     refinement_request,
                     plan_context=plan_context,
                 ),
+                reference_image_data=reference_image_data,
+                reference_image_mime_type=reference_image_mime_type,
             )
         except Exception as error:
             response = None
@@ -1079,7 +1340,9 @@ def refine_activity(spec, current_source, current_plan, output_root,
                 patched_source = patched
                 if validate_code:
                     passed, diagnostics = _check_activity_candidate(
-                        patched_source, spec, current_plan)
+                        patched_source, spec, current_plan,
+                        refinement_parent=current_source,
+                        refinement_request=refinement_request)
                 else:
                     passed = True
                     diagnostics = {
@@ -1160,6 +1423,7 @@ def refine_activity(spec, current_source, current_plan, output_root,
             validate_code=validate_code,
             goal=refinement_request,
             cancel_check=cancel_check,
+            refinement_parent=current_source,
         )
         repair_history.extend(
             _persistable_repair_event(event, selected_provider)
@@ -1202,6 +1466,11 @@ def refine_activity(spec, current_source, current_plan, output_root,
     plan['original_source_hash'] = current_plan.get(
         'original_source_hash', plan['parent_source_hash'])
     plan['source_hash'] = _source_hash(patched_source)
+    plan['last_refinement_request'] = refinement_request
+    plan['refinement_requests'] = (
+        list(current_plan.get('refinement_requests') or []) +
+        [refinement_request]
+    )[-20:]
     plan['repair_history'] = (
         list(current_plan.get('repair_history') or []) + repair_history
     )[-100:]

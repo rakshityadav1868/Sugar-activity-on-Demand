@@ -15,6 +15,11 @@ caller rejects that patch transaction and asks for a corrected patch.  The
 existing source is never discarded in favour of full regeneration.
 """
 
+import ast
+import difflib
+import re
+
+
 SEARCH_MARKER = '<<<<<<< SEARCH'
 DIVIDER_MARKER = '======='
 REPLACE_MARKER = '>>>>>>> REPLACE'
@@ -44,6 +49,20 @@ def build_refine_system_prompt():
         'or reformat.\n'
         '- The REPLACE section is the new code that replaces the SEARCH '
         'section.\n'
+        '- Treat the new refinement request as an acceptance checklist. '
+        'Implement every clause that can affect behavior or appearance; do '
+        'not satisfy a request with comments, renamed labels, or metadata.\n'
+        '- A refinement must cause a visible or functional improvement in '
+        'the running activity. When the request says improve, fix, or add '
+        'features without much detail, inspect the existing code, identify '
+        'the weakest relevant behavior, and make concrete learner-visible '
+        'changes while preserving working parts.\n'
+        '- Diagnose question-shaped feedback as a repair request. For '
+        'example, "why does the character disappear?" means find and fix '
+        'the state/update/drawing defect, not add an explanation label.\n'
+        '- For game mechanics, update the complete behavior: initialized '
+        'state, input handlers, update/collision logic, drawing/HUD, reset '
+        'or restart behavior, and Journal persistence where applicable.\n'
         '- You may output multiple SEARCH/REPLACE blocks.  Separate them '
         'with a blank line.\n'
         '- Keep each SEARCH block as small as possible while still being '
@@ -60,6 +79,21 @@ def build_refine_system_prompt():
         'the existing source.\n'
         '- Preserve all Sugar Activity patterns: ToolbarBox, StopButton, '
         'set_canvas, read_file/write_file, Journal persistence.\n'
+        '- Preserve the whole-interface Sugar design: dominant learner '
+        'canvas, compact persistent panels only when necessary, primary '
+        'actions in Sugar toolbars, contextual actions in palettes or '
+        'sub-toolbars, Sugar style constants/widgets, grayscale chrome, and '
+        'allocation-driven responsive layout. Never introduce a generic '
+        'card dashboard, brand skin, or unnecessary permanent sidebar.\n'
+        '- If the user message includes a reference image, inspect it '
+        'directly and make the requested visual/layout change match it. Use '
+        'any written Reference image brief as supporting context, not as a '
+        'replacement for the attached pixels. Preserve every visible target '
+        'region/control one-for-one, including approximate proportions, '
+        'alignment, ordering, palette relationships, and state. Do not omit, '
+        'merge, relocate, or redesign target activity content in the name of '
+        'Sugar-native cleanup. Apply Sugar conventions only to host chrome '
+        'and reference-unspecified details.\n'
         '- Keep the same class name GeneratedActivity.\n'
         '- Use only classroom-safe imports.  No networking, subprocesses, '
         'or filesystem access.\n'
@@ -74,23 +108,109 @@ def build_refine_user_prompt(current_source, refinement_request,
     SEARCH blocks.  The plan context is optional and kept small.
     """
     parts = [
-        'Refine this Sugar activity.py according to the request below.\n',
-        'Current activity.py (%d lines):\n' % current_source.count('\n'),
-        current_source.rstrip(),
-        '\n\n---\n\nRefinement request:\n',
-        refinement_request,
+        'NEW REFINEMENT REQUEST (implement every applicable clause):\n',
+        refinement_request.strip(),
+        '\n\n--- CURRENT ACTIVITY CONTEXT ---\n',
     ]
     if plan_context:
-        parts.append('\n\nPlan context (for reference):\n')
+        parts.append('Current plan context:\n')
         parts.append(plan_context)
-    parts.append(
-        '\n\n---\n\n'
+        parts.append('\n\n')
+    parts.extend([
+        'Current activity.py (%d lines):\n' % current_source.count('\n'),
+        current_source.rstrip(),
+        '\n\n--- END CURRENT ACTIVITY ---\n\n'
+        'Re-check the new refinement request: ',
+        refinement_request.strip(),
+        '\n\n'
         'Return SEARCH/REPLACE blocks for the changes.  Copy SEARCH '
         'lines EXACTLY from the source above.  Never output FULLREGEN or a '
         'complete replacement file; split larger changes into focused '
         'blocks.'
-    )
+    ])
     return ''.join(parts)
+
+
+def validate_refinement_result(current_source, candidate_source, request):
+    """Return concrete reasons a refinement did not fulfil its request.
+
+    The normal validator proves that a candidate is a safe, runnable Sugar
+    activity.  It cannot prove that an edit actually addressed the latest
+    teacher message because the parent can already satisfy the broad activity
+    prompt.  This lightweight delta gate checks only common, unambiguous
+    refinement intents and leaves open-ended creative judgment to the model.
+    """
+    errors = []
+    request_lower = (request or '').lower()
+    if current_source == candidate_source:
+        return ['The refinement did not change activity.py.']
+
+    changed_lines = []
+    matcher = difflib.SequenceMatcher(
+        None, current_source.splitlines(), candidate_source.splitlines())
+    for tag, _old_start, _old_end, new_start, new_end in matcher.get_opcodes():
+        if tag in ('replace', 'insert'):
+            changed_lines.extend(
+                candidate_source.splitlines()[new_start:new_end])
+    changed = '\n'.join(changed_lines).lower()
+
+    # "Improve" and question-shaped bug reports must alter executable code,
+    # not merely add reassuring comments or labels.
+    asks_for_improvement = bool(re.search(
+        r'\b(improve|improved|improvement|fix|broken|bug|not working|'
+        r"doesn['’]?t work|why (?:is|does|do|can))\b",
+        request_lower))
+    if asks_for_improvement:
+        try:
+            before_ast = ast.dump(ast.parse(current_source), include_attributes=False)
+            after_ast = ast.dump(ast.parse(candidate_source), include_attributes=False)
+        except (SyntaxError, TypeError):
+            # Static validation reports syntax failures with a better message.
+            before_ast = after_ast = None
+        if before_ast is not None and before_ast == after_ast:
+            errors.append(
+                'The refinement changed only comments or formatting; it must '
+                'change the running activity.')
+
+    if re.search(r'\b(graphic|graphics|visual|appearance|colour|color|'
+                 r'animation|artwork)\b', request_lower):
+        visual_signals = (
+            'draw', 'cairo', 'set_source', 'rgb', 'gradient', 'paint',
+            'arc(', 'rectangle(', 'line_to(', 'move_to(', 'particle',
+            'queue_draw',
+        )
+        if not any(signal in changed for signal in visual_signals):
+            errors.append(
+                'The request asks for a visual improvement, but no drawing '
+                'or rendering code changed.')
+
+    if re.search(r'\b(life|lives|heart|hearts)\b', request_lower):
+        candidate_lower = candidate_source.lower()
+        if 'lives' not in candidate_lower and 'life' not in candidate_lower:
+            errors.append(
+                'The request asks for lives, but the activity has no lives '
+                'state or display.')
+        elif not any(signal in changed for signal in (
+                'lives', 'life', 'heart', 'damage', 'collision')):
+            errors.append(
+                'The request asks to improve lives, but the lives mechanic '
+                'was not changed.')
+
+    if re.search(r'\b(arrow keys?|keyboard|keys? controls?|wasd)\b',
+                 request_lower):
+        candidate_lower = candidate_source.lower()
+        if not any(signal in candidate_lower for signal in (
+                'key-press-event', 'key_press_event', 'gdk.key_')):
+            errors.append(
+                'The request asks for keyboard control, but no keyboard '
+                'input handler is present.')
+        elif not any(signal in changed for signal in (
+                'key_', 'key-', 'key_', 'keys_pressed', 'keys_held')):
+            errors.append(
+                'The request asks to improve keyboard control, but keyboard '
+                'handling was not changed.')
+
+    return errors
 
 
 def parse_search_replace(response):

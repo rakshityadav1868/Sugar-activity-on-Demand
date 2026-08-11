@@ -8,6 +8,7 @@ from generation.refine import apply_patches
 from generation.refine import build_refine_system_prompt
 from generation.refine import build_refine_user_prompt
 from generation.refine import parse_search_replace
+from generation.refine import validate_refinement_result
 
 
 _SAMPLE_SOURCE = (
@@ -189,6 +190,7 @@ class TestRefinePrompts(unittest.TestCase):
         self.assertIn('SEARCH', prompt)
         self.assertIn('REPLACE', prompt)
         self.assertIn('FULLREGEN', prompt)
+        self.assertIn('whole-interface Sugar design', prompt)
 
     def test_user_prompt_includes_source(self):
         prompt = build_refine_user_prompt(
@@ -201,6 +203,46 @@ class TestRefinePrompts(unittest.TestCase):
         prompt = build_refine_user_prompt(
             _SAMPLE_SOURCE, 'add undo', plan_context='{"template": "canvas"}')
         self.assertIn('canvas', prompt)
+
+    def test_user_prompt_leads_with_latest_request(self):
+        prompt = build_refine_user_prompt(
+            _SAMPLE_SOURCE, 'make arrow-key control responsive')
+        self.assertTrue(prompt.startswith('NEW REFINEMENT REQUEST'))
+        self.assertLess(prompt.index('make arrow-key control responsive'),
+                        prompt.index('Current activity.py'))
+
+
+class TestRefinementValidation(unittest.TestCase):
+
+    def test_improvement_cannot_be_comments_only(self):
+        candidate = _SAMPLE_SOURCE.replace(
+            '        self._score = 0',
+            '        # improved graphics\n        self._score = 0')
+        errors = validate_refinement_result(
+            _SAMPLE_SOURCE, candidate, 'Improve the graphics')
+        self.assertTrue(any('comments or formatting' in error
+                            for error in errors))
+
+    def test_visual_request_must_change_rendering_code(self):
+        candidate = _SAMPLE_SOURCE.replace(
+            '        self._score = 0', '        self._score = 10')
+        errors = validate_refinement_result(
+            _SAMPLE_SOURCE, candidate, 'Improve the graphics')
+        self.assertTrue(any('drawing or rendering' in error
+                            for error in errors))
+
+    def test_matching_functional_changes_pass(self):
+        candidate = _SAMPLE_SOURCE.replace(
+            '        self._score = 0',
+            '        self._score = 0\n'
+            '        self.lives = 5\n'
+            '        self.keys_pressed = set()\n'
+            "        self.connect('key-press-event', self.on_key_press)\n"
+            '        self.queue_draw()  # refresh visual graphics')
+        errors = validate_refinement_result(
+            _SAMPLE_SOURCE, candidate,
+            'Improve graphics, proper lives, and arrow-key controls')
+        self.assertEqual([], errors)
 
 
 if __name__ == '__main__':

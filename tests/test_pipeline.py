@@ -12,10 +12,12 @@ from unittest import mock
 
 from generation.generator import enrich_plan
 from llm.providers import ProviderError
+from llm.providers import ProviderImageUnsupportedError
 from generation.pipeline import generate_activity
 from generation.pipeline import PipelineError
 from generation.pipeline import refine_activity
 from generation.pipeline import _request_initial_activity_source
+from generation.pipeline import _actual_refinement_request
 from core.spec import ActivitySpec
 from generation.templates import render_activity_source
 
@@ -336,6 +338,15 @@ class TestAodPipeline(unittest.TestCase):
         shutil.rmtree(self.output_root)
         self._feature_flags.stop()
 
+    def test_legacy_wrapped_refinement_uses_only_latest_request(self):
+        wrapped = (
+            'Original learner request:\nBuild a swimming game.\n\n'
+            'Current activity.py excerpt:\nold source\n\n'
+            'Refinement request:\nFix the arrow-key controls.')
+        self.assertEqual(
+            'Fix the arrow-key controls.',
+            _actual_refinement_request(wrapped))
+
     def test_provider_plan_runs_end_to_end(self):
         events = []
         provider = _CodegenProvider(_valid_activity_source(self.spec))
@@ -366,6 +377,35 @@ class TestAodPipeline(unittest.TestCase):
                 encoding='utf-8') as plan_file:
             saved_plan = json.load(plan_file)
         self.assertEqual('fake', saved_plan['provider'])
+        self.assertFalse(saved_plan['reference_image_supplied'])
+        self.assertFalse(saved_plan['reference_brief_supplied'])
+
+    def test_plan_records_reference_delivery_without_persisting_pixels(self):
+        spec = ActivitySpec(
+            'Reference Quest',
+            'Student request:\nBuild this.\n\nReference image brief:\n'
+            '- Layout: left tools, center canvas, right challenge',
+            'creation',
+            'MIT',
+        )
+        private_pixels = b'private-reference-pixels-must-not-be-saved'
+        provider = _CodegenProvider(_valid_activity_source(spec))
+
+        result = generate_activity(
+            spec,
+            self.output_root,
+            provider=provider,
+            enhance=False,
+            reference_image_data=private_pixels,
+            reference_image_mime_type='image/png',
+        )
+
+        self.assertTrue(result.plan['reference_image_supplied'])
+        self.assertTrue(result.plan['reference_brief_supplied'])
+        with open(os.path.join(result.project_path, 'aod_plan.json'),
+                  encoding='utf-8') as plan_file:
+            saved_text = plan_file.read()
+        self.assertNotIn(private_pixels.decode('ascii'), saved_text)
 
     def test_initial_source_adapter_ignores_positional_only_optionals(self):
         def generate_source(system_prompt, user_prompt,
@@ -377,6 +417,33 @@ class TestAodPipeline(unittest.TestCase):
         source = _request_initial_activity_source(
             generate_source, 'system', 'user', lambda value: None, 4000)
         self.assertEqual('candidate source', source)
+
+    def test_initial_source_adapter_forwards_image_and_falls_back_to_brief(self):
+        calls = []
+
+        def generate_source(system_prompt, user_prompt,
+                            stream_callback=None, max_output_tokens=None,
+                            image_data=None, image_mime_type=''):
+            calls.append((image_data, image_mime_type))
+            if image_data:
+                raise ProviderImageUnsupportedError('text-only route')
+            return 'candidate from analyzed reference brief'
+
+        source = _request_initial_activity_source(
+            generate_source,
+            'system',
+            'user prompt containing Reference image brief',
+            lambda value: None,
+            4000,
+            reference_image_data=b'normalized-pixels',
+            reference_image_mime_type='image/png',
+        )
+
+        self.assertEqual('candidate from analyzed reference brief', source)
+        self.assertEqual([
+            (b'normalized-pixels', 'image/png'),
+            (None, ''),
+        ], calls)
 
     def test_short_prompt_is_enhanced_before_planning(self):
         events = []
@@ -469,6 +536,31 @@ class TestAodPipeline(unittest.TestCase):
 
         self.assertEqual('', search_calls[0]['template'])
         self.assertGreaterEqual(search_calls[0]['limit'], 6)
+
+    def test_provider_rag_query_adds_mechanics_without_replacing_prompt(self):
+        search_calls = []
+
+        def fake_search(query, limit=5, template='', corpus=None):
+            search_calls.append(query)
+            return []
+
+        race = ActivitySpec(
+            'Swim Race',
+            'Make a swimming race with obstacles and arrow keys.',
+            'games',
+            'MIT',
+        )
+        with mock.patch('generation.pipeline.search', fake_search):
+            generate_activity(
+                race,
+                self.output_root,
+                provider=_CodegenProvider(_valid_activity_source(race)),
+                use_rag=True,
+                enhance=False,
+            )
+
+        self.assertIn(race.prompt, search_calls[0])
+        self.assertIn('keyboard controls animation loop', search_calls[0])
 
     def test_provider_failure_fails_without_template_fallback(self):
         with self.assertRaises(PipelineError) as raised:
@@ -987,6 +1079,97 @@ class TestAodPipeline(unittest.TestCase):
                       result.files['activity.py'])
         self.assertNotIn('class GeneratedActivity(object):',
                          result.files['activity.py'])
+
+    def test_resume_repair_fixes_known_api_errors_without_model_retry(self):
+        from generation.pipeline import resume_repair
+
+        current_plan = enrich_plan(
+            self.spec,
+            _FakeProvider().generate_plan('Sugar Activity API reference', ''),
+        )
+        draft = _valid_activity_source(self.spec).replace(
+            '        self.set_canvas(canvas)',
+            '        self.mode = Gtk.RadioToolButton()\n'
+            '        self.mode.set_tooltip(_("Mirror mode"))\n'
+            '        canvas.set_size_request('
+            'style.grid_size * 4, -1)\n'
+            '        self.set_canvas(canvas)',
+            1,
+        )
+        self.assertIn('style.grid_size', draft)
+        provider = _SequencedRefineProvider([])
+
+        result = resume_repair(
+            self.spec,
+            draft,
+            {
+                'stage': 'runtime_check',
+                'errors': [
+                    "Gtk.RadioToolButton has no attribute 'set_tooltip'"
+                ],
+                'warnings': [],
+            },
+            self.output_root,
+            provider=provider,
+            current_plan=current_plan,
+            package_bundle=False,
+        )
+
+        self.assertEqual(0, provider.repair_calls)
+        self.assertIn('self.mode.set_tooltip_text(',
+                      result.files['activity.py'])
+        self.assertIn('style.GRID_CELL_SIZE * 4',
+                      result.files['activity.py'])
+        self.assertEqual(
+            'known_api_repairs_passed',
+            result.plan['repair_history'][-1]['outcome'],
+        )
+
+    def test_resume_repair_fixes_forbidden_journal_os_without_model_retry(
+            self):
+        from generation.pipeline import resume_repair
+
+        current_plan = enrich_plan(
+            self.spec,
+            _FakeProvider().generate_plan('Sugar Activity API reference', ''),
+        )
+        draft = _valid_activity_source(self.spec)
+        draft = draft.replace('import json\n', 'import os\nimport json\n', 1)
+        draft = draft.replace(
+            '    def read_file(self, file_path):\n        try:\n',
+            '    def read_file(self, file_path):\n'
+            '        if not os.path.exists(file_path):\n'
+            '            return\n'
+            '        try:\n',
+            1,
+        )
+        self.assertIn('os.path.exists(file_path)', draft)
+        provider = _SequencedRefineProvider([])
+
+        result = resume_repair(
+            self.spec,
+            draft,
+            {
+                'stage': 'static_validation',
+                'errors': ['Forbidden import: os'],
+                'warnings': [],
+            },
+            self.output_root,
+            provider=provider,
+            current_plan=current_plan,
+            package_bundle=False,
+        )
+
+        repaired = result.files['activity.py']
+        self.assertEqual(0, provider.repair_calls)
+        self.assertNotIn('import os', repaired)
+        self.assertIn(
+            'GLib.file_test(file_path, GLib.FileTest.EXISTS)', repaired)
+        self.assertEqual('repaired', result.plan['repair_status'])
+        self.assertEqual(
+            'known_api_repairs_passed',
+            result.plan['repair_history'][-1]['outcome'],
+        )
 
     def test_resume_repair_without_model_preserves_draft(self):
         from generation.pipeline import resume_repair
