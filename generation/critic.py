@@ -18,6 +18,7 @@ said OK.
 """
 
 import logging
+import inspect
 import os
 
 from generation.refine import apply_patches
@@ -34,15 +35,61 @@ def build_critic_system_prompt():
         'You are Sugar Activity on Demand, reviewing a Sugar activity '
         'you just wrote before it is given to a learner.\n\n'
         'Check the code against this list:\n'
+        '- The learner request is the product definition. The activity must '
+        'not contain invented math questions, number collecting, quizzes, '
+        'vocabulary, assessment, reflection, explanation prompts, teacher '
+        'flow, or partner roles unless the request, confirmed requirements, '
+        'or reference image explicitly calls for them.\n'
+        '- If the request contains a Reference image brief, reference '
+        'fidelity overrides every generic layout preference below for the '
+        'target activity region. Preserve its visible regions and controls '
+        'one-for-one, approximate proportions, placement, ordering, palette '
+        'relationships, and state. Never patch away or relocate target '
+        'content merely to make it more conventionally Sugar-native; apply '
+        'Sugar cleanup only to host chrome and unspecified details.\n'
         '- Every button, entry, and control is connected to a handler '
         'that does something visible.\n'
+        '- For real-time games, the player character and controls are clear '
+        'before play starts; input state belongs to the activity instance; '
+        'damage never makes the player permanently disappear; and restart '
+        'clears keys, entities, timers, win, and game-over state. Inspect '
+        'every delayed/random entity and drawing branch, not just the first '
+        'frame. A cairo.Context must never receive custom attributes such as '
+        '`cr.ellipse`; use save/translate/scale/arc/restore instead.\n'
         '- The win / success / feedback logic is actually reachable by '
         'playing the activity.\n'
         '- write_file saves the real activity state and read_file '
         'restores it, so closing and reopening resumes the activity.\n'
         '- The learner can tell what to do: instructions or labels are '
         'visible on screen.\n'
+        '- The complete UI is Sugar-native: the learner workspace dominates; '
+        'primary actions use Sugar toolbar controls; contextual actions use '
+        'palettes/sub-toolbars; persistent panels exist only when continuously '
+        'relevant; spacing, colors, icons, and feedback use sugar3.graphics '
+        'style/widgets.\n'
+        '- The UI is also visually composed and calm: aligned Sugar spacing, '
+        'sentence-case labels, compact consistent targets, no tall or '
+        'stretched text action beside the workspace, and no separate bordered '
+        'frame around every instruction, setting, requirement, and status.\n'
+        '- Drawing/construction activities keep one dominant canvas, one '
+        'concise challenge/status row, and at most one compact tool tray or '
+        'contextual palette. Check/Play/Hint/Undo/Redo/Clear/Reset/Next are '
+        'icon-and-tooltip toolbar actions rather than oversized canvas-side '
+        'buttons.\n'
+        '- The activity does not impose generic white cards, brand-blue '
+        'headings, shadows, gradients, a web dashboard, or a permanent '
+        'sidebar that crowds the learner canvas.\n'
+        '- The interface remains usable at 1024x768, with allocation-driven '
+        'boards/canvases and bounded wrapped labels.\n'
+        '- Tool and mode selection changes actual interaction; undo/redo/reset '
+        'state stays synchronized; success feedback is computed from learner '
+        'state; resizing keeps drawing and hit testing aligned; and restored '
+        'Journal state is immediately redrawn.\n'
         '- No dead code, placeholder text, or TODO stubs remain.\n\n'
+        'Sugar-native appearance and visual polish are advisory. If the '
+        'activity follows the learner prompt/reference and works correctly, '
+        'reply OK even when its styling is not perfectly Sugar-native. Never '
+        'patch a working activity solely for aesthetic conformity.\n\n'
         'If the code passes the whole list, reply with exactly:\n'
         'OK\n'
         '...and nothing else.\n\n'
@@ -57,8 +104,9 @@ def build_critic_system_prompt():
         '- The SEARCH section must be copied EXACTLY from the current '
         'source, including indentation and whitespace.\n'
         '- Keep each SEARCH block small but unique (3-10 lines).\n'
-        '- Fix only real defects from the list above.  Do NOT restyle, '
-        'rename, or rewrite working code.\n'
+        '- Fix only functional, safety, persistence, responsiveness, prompt, '
+        'or reference-fidelity defects. Do not rename or rewrite working code '
+        'and do not patch solely for Sugar-native styling.\n'
         '- FULLREGEN is not allowed here.  Never reply OK when a defect '
         'exists; express the highest-priority fix as focused patches.\n'
         '- Preserve all Sugar Activity patterns: ToolbarBox, '
@@ -93,7 +141,9 @@ def build_critic_user_prompt(spec, plan, source, warnings=None):
     return ''.join(parts)
 
 
-def run_critic_round(provider, spec, plan, source, warnings=None):
+def run_critic_round(provider, spec, plan, source, warnings=None,
+                     reference_image_data=None,
+                     reference_image_mime_type=''):
     """Return the (possibly patched) source; never raises.
 
     Records the outcome in plan['critic']: 'ok' when the model found
@@ -111,9 +161,12 @@ def run_critic_round(provider, spec, plan, source, warnings=None):
         return source
 
     try:
-        response = generate_text(
+        response = _request_critic_text(
+            generate_text,
             build_critic_system_prompt(),
             build_critic_user_prompt(spec, plan, source, warnings),
+            reference_image_data,
+            reference_image_mime_type,
         )
     except Exception as error:
         logging.warning('Critic call failed: %s',
@@ -165,6 +218,35 @@ def run_critic_round(provider, spec, plan, source, warnings=None):
 
     plan['critic'] = 'patched:%d' % applied
     return patched
+
+
+def _request_critic_text(generate_text, system_prompt, user_prompt,
+                         image_data, image_mime_type):
+    """Let the final reviewer compare source against original pixels."""
+    kwargs = {}
+    try:
+        parameters = inspect.signature(generate_text).parameters
+    except (TypeError, ValueError):
+        parameters = {}
+    accepts_kwargs = any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters.values())
+    if isinstance(image_data, bytes) and image_data and \
+            image_mime_type in ('image/png', 'image/jpeg'):
+        for name, value in (
+                ('image_data', image_data),
+                ('image_mime_type', image_mime_type)):
+            parameter = parameters.get(name)
+            if accepts_kwargs or (
+                    parameter is not None and
+                    parameter.kind != inspect.Parameter.POSITIONAL_ONLY):
+                kwargs[name] = value
+    try:
+        return generate_text(system_prompt, user_prompt, **kwargs)
+    except Exception as error:
+        if kwargs and type(error).__name__ == 'ProviderImageUnsupportedError':
+            return generate_text(system_prompt, user_prompt)
+        raise
 
 
 def _provider_secrets(provider):

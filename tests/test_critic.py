@@ -7,6 +7,7 @@ import unittest
 from unittest import mock
 
 from generation.critic import run_critic_round
+from generation.critic import build_critic_system_prompt
 from generation.generator import enrich_plan
 from generation.templates import render_activity_source
 from core.spec import ActivitySpec
@@ -33,6 +34,22 @@ class _CriticProvider:
 class _NoTextProvider:
     name = 'plan-only'
     model = 'plan-1'
+
+
+class _ImageCriticProvider(_CriticProvider):
+
+    def __init__(self, response):
+        _CriticProvider.__init__(self, response)
+        self.image_data = None
+        self.image_mime_type = ''
+
+    def generate_text(self, system_prompt, user_prompt, timeout=120,
+                      stream_callback=None, image_data=None,
+                      image_mime_type=''):
+        self.image_data = image_data
+        self.image_mime_type = image_mime_type
+        return _CriticProvider.generate_text(
+            self, system_prompt, user_prompt, timeout, stream_callback)
 
 
 def _spec_and_source():
@@ -71,6 +88,31 @@ class TestCriticRound(unittest.TestCase):
         self.assertEqual(self.source, result)
         self.assertEqual('ok', self.plan['critic'])
         self.assertEqual(1, provider.calls)
+
+    def test_critic_checks_polish_and_real_interaction(self):
+        prompt = build_critic_system_prompt()
+
+        self.assertIn('stretched text action', prompt)
+        self.assertIn('one dominant canvas', prompt)
+        self.assertIn('success feedback is computed', prompt)
+        self.assertIn('reference fidelity overrides', prompt)
+        self.assertIn('Never patch away or relocate', prompt)
+        self.assertIn('reply OK even when its styling is not perfectly',
+                      prompt)
+        self.assertIn('do not patch solely for Sugar-native styling', prompt)
+
+    def test_reference_pixels_reach_final_critic(self):
+        provider = _ImageCriticProvider('OK')
+
+        with mock.patch.dict(os.environ, _CRITIC_ENV):
+            result = run_critic_round(
+                provider, self.spec, self.plan, self.source,
+                reference_image_data=b'reference-pixels',
+                reference_image_mime_type='image/png')
+
+        self.assertEqual(self.source, result)
+        self.assertEqual(b'reference-pixels', provider.image_data)
+        self.assertEqual('image/png', provider.image_mime_type)
 
     def test_valid_patch_is_applied(self):
         provider = _CriticProvider(_patch_block(
