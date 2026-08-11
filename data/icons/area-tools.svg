@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"
+ "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd" [
+  <!ENTITY stroke_color "#010101">
+  <!ENTITY fill_color "#FFFFFF">
+]>
+<svg xmlns="http://www.w3.org/2000/svg" width="55" height="55" viewBox="0 0 55 55">
+  <g fill="&fill_color;" stroke="&stroke_color;" stroke-width="3.5"
+     stroke-linecap="round" stroke-linejoin="round">
+    <path d="M40 8 Q48 12 48 21 L42 21 Q40 17 37 15 L37 9 Q38 8 40 8 Z"/>
+    <rect x="11" y="24" width="28" height="7" rx="2"
+          transform="rotate(-45 27.5 27.5)"/>
+    <path d="M15 47 Q8 43 7 34 L13 34 Q15 38 18 40 L18 46 Q17 47 15 47 Z"/>
+  </g>
+</svg>

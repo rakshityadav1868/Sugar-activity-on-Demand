@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"
+ "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd" [
+  <!ENTITY stroke_color "#010101">
+  <!ENTITY fill_color "#FFFFFF">
+]>
+<svg xmlns="http://www.w3.org/2000/svg" width="55" height="55" viewBox="0 0 55 55">
+  <g fill="&fill_color;" stroke="&stroke_color;" stroke-width="3.5"
+     stroke-linecap="round" stroke-linejoin="round">
+    <path d="M22 6 L22 20 L9 44 Q8 47 11 48 L44 48 Q47 47 46 44 L33 20 L33 6 Z"/>
+    <line x1="19" y1="6" x2="36" y2="6"/>
+    <line x1="14" y1="36" x2="41" y2="36"/>
+    <circle cx="24" cy="41" r="2.5"/>
+    <circle cx="32" cy="39" r="1.8"/>
+  </g>
+</svg>

@@ -66,6 +66,10 @@ _ACTIVITY_ICON = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     'activity', 'activity.svg')
 
+_ICONS_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    'data', 'icons')
+
 
 def _brand_icon_kwargs(file_property='file'):
     """Icon kwargs naming the studio's logo, or the theme XO if it is gone.
@@ -819,7 +823,7 @@ class CreateAIActivityPanel(Gtk.EventBox):
 
         send_btn = Gtk.Button()
         self._prompt_send_button = send_btn
-        send_icon = Icon(icon_name='go-up',
+        send_icon = Icon(file=os.path.join(_ICONS_DIR, 'go-up.svg'),
                          pixel_size=style.SMALL_ICON_SIZE,
                          stroke_color=style.COLOR_WHITE.get_svg(),
                          fill_color=style.COLOR_WHITE.get_svg())
@@ -942,17 +946,17 @@ class CreateAIActivityPanel(Gtk.EventBox):
     def _get_learning_area_options(self):
         return [
             ('logic_math', _('Logic & math'), _('Puzzles & patterns'),
-             'insert-table'),
+             os.path.join(_ICONS_DIR, 'area-logic-math.svg')),
             ('science', _('Science'), _('Explore & measure'),
-             'system-search'),
+             os.path.join(_ICONS_DIR, 'area-science.svg')),
             ('language', _('Language'), _('Stories & words'),
-             'edit-description'),
+             os.path.join(_ICONS_DIR, 'area-language.svg')),
             ('tools_utils', _('Tools'), _('Build helpful tools'),
-             'preferences-system'),
+             os.path.join(_ICONS_DIR, 'area-tools.svg')),
             ('games', _('Games'), _('Play loops & score'),
-             'media-playback-start'),
+             os.path.join(_ICONS_DIR, 'area-games.svg')),
             ('creation', _('Creation'), _('Make & express'),
-             'toolbar-colors'),
+             os.path.join(_ICONS_DIR, 'area-creation.svg')),
         ]
 
     # A distinct (stroke, fill) colour per learning area so each card's
@@ -996,7 +1000,7 @@ class CreateAIActivityPanel(Gtk.EventBox):
         box.show()
         return box, value_label
 
-    def _create_template_card(self, value, title, detail, icon_name):
+    def _create_template_card(self, value, title, detail, icon_file):
         button = Gtk.Button()
         button.set_relief(Gtk.ReliefStyle.NONE)
         button.get_style_context().add_class('create-ai-template-card')
@@ -1018,7 +1022,7 @@ class CreateAIActivityPanel(Gtk.EventBox):
         badge.set_halign(Gtk.Align.CENTER)
         badge.set_valign(Gtk.Align.CENTER)
         badge.set_size_request(style.zoom(64), style.zoom(64))
-        icon = Icon(icon_name=icon_name,
+        icon = Icon(file=icon_file,
                     pixel_size=style.STANDARD_ICON_SIZE,
                     stroke_color=style.COLOR_TOOLBAR_GREY.get_svg(),
                     fill_color=style.COLOR_INACTIVE_FILL.get_svg())
@@ -4746,7 +4750,7 @@ class CreateAIActivityPanel(Gtk.EventBox):
 
         send = Gtk.Button()
         self._ask_bar_send_button = send
-        send_icon = Icon(icon_name='go-up',
+        send_icon = Icon(file=os.path.join(_ICONS_DIR, 'go-up.svg'),
                          pixel_size=style.SMALL_ICON_SIZE,
                          stroke_color=style.COLOR_WHITE.get_svg(),
                          fill_color=style.COLOR_WHITE.get_svg())
