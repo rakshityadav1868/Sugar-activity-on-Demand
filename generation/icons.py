@@ -260,6 +260,13 @@ _FORBIDDEN_MARKUP = (
 
 _EVENT_ATTR = re.compile(r'\bon[a-z]+\s*=', re.IGNORECASE)
 _EXTERNAL_REF = re.compile(r'(?:xlink:)?href\s*=\s*["\'](?!#)')
+_HEX_COLOR = re.compile(r'^#[0-9A-Fa-f]{6}$')
+_ENTITY_COLOR = {
+    'stroke': re.compile(
+        r'(<!ENTITY\s+stroke_color\s+["\'])(#[0-9A-Fa-f]{6})(["\']>)'),
+    'fill': re.compile(
+        r'(<!ENTITY\s+fill_color\s+["\'])(#[0-9A-Fa-f]{6})(["\']>)'),
+}
 
 
 def build_icon_system_prompt():
@@ -357,6 +364,40 @@ def sanitize_icon_svg(text):
     except Exception:
         return None
     return candidate
+
+
+def recolor_icon_svg(text, stroke_color, fill_color):
+    """Return a sanitized Sugar icon with new default entity colours.
+
+    Sugar can still recolor the two entities for an XO profile.  Updating the
+    entity defaults controls the icon shown in previews and in environments
+    that do not supply a profile colour, without turning the SVG into a
+    fixed-colour or unsafe asset.
+    """
+    safe = sanitize_icon_svg(text)
+    if safe is None:
+        return None
+    if not isinstance(stroke_color, str) or \
+            not _HEX_COLOR.fullmatch(stroke_color):
+        return None
+    if not isinstance(fill_color, str) or \
+            not _HEX_COLOR.fullmatch(fill_color):
+        return None
+    colored = _ENTITY_COLOR['stroke'].sub(
+        r'\g<1>%s\g<3>' % stroke_color.upper(), safe, count=1)
+    colored = _ENTITY_COLOR['fill'].sub(
+        r'\g<1>%s\g<3>' % fill_color.upper(), colored, count=1)
+    return colored
+
+
+def icon_entity_colors(text):
+    """Read an icon's entity defaults, falling back to Sugar black/white."""
+    if isinstance(text, str):
+        stroke = _ENTITY_COLOR['stroke'].search(text)
+        fill = _ENTITY_COLOR['fill'].search(text)
+        if stroke and fill:
+            return stroke.group(2).upper(), fill.group(2).upper()
+    return '#282828', '#FFFFFF'
 
 
 def request_icon_svg(provider, spec, plan):

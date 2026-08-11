@@ -6,6 +6,8 @@ import os
 import unittest
 from unittest import mock
 
+from generation.icons import icon_entity_colors
+from generation.icons import recolor_icon_svg
 from generation.icons import render_activity_icon
 from generation.icons import request_icon_svg
 from generation.icons import sanitize_icon_svg
@@ -42,6 +44,26 @@ def _spec():
 
 
 class TestActivityIcons(unittest.TestCase):
+
+    def test_recolor_keeps_sugar_entities_and_updates_defaults(self):
+        original = render_activity_icon(
+            {'name': 'Color Garden', 'template': 'canvas'})
+
+        recolored = recolor_icon_svg(original, '#123456', '#ABCDEF')
+
+        self.assertIsNotNone(recolored)
+        self.assertIn('<!ENTITY stroke_color "#123456">', recolored)
+        self.assertIn('<!ENTITY fill_color "#ABCDEF">', recolored)
+        self.assertIn('&stroke_color;', recolored)
+        self.assertEqual(
+            ('#123456', '#ABCDEF'), icon_entity_colors(recolored))
+
+    def test_recolor_rejects_invalid_color(self):
+        original = render_activity_icon(
+            {'name': 'Color Garden', 'template': 'canvas'})
+
+        self.assertIsNone(recolor_icon_svg(
+            original, 'javascript:red', '#FFFFFF'))
 
     def test_icon_uses_sugar_color_entities(self):
         svg = render_activity_icon({'name': 'Quiz Fun', 'template': 'quiz'})
