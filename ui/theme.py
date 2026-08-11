@@ -1656,43 +1656,6 @@ _CSS_TEMPLATE = '''
                 font-size: 13px;
                 font-weight: 700;
             }
-            .create-ai-install-icon-preview {
-                border-radius: 18px;
-                border: 1px solid %(studio_edge)s;
-                background-color: %(studio_preview)s;
-                box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.70);
-            }
-            .create-ai-install-icon-source {
-                color: %(toolbar)s;
-                font-size: 12px;
-                font-weight: 700;
-            }
-            .create-ai-install-color-label {
-                color: %(toolbar)s;
-                font-size: 11px;
-            }
-            .create-ai-install-icon-status {
-                color: %(inactive_stroke)s;
-                font-size: 11px;
-            }
-            button.create-ai-install-secondary {
-                border-radius: 10px;
-                border: 1px solid %(studio_edge)s;
-                background-image: none;
-                background-color: %(studio_surface)s;
-                color: %(toolbar)s;
-                padding: 7px 10px;
-                font-size: 11px;
-                font-weight: 700;
-                min-height: 28px;
-            }
-            button.create-ai-install-secondary:hover {
-                border-color: %(violet_soft_border)s;
-                background-color: %(violet_soft)s;
-            }
-            button.create-ai-install-secondary label {
-                color: %(toolbar)s;
-            }
             combobox.create-ai-install-license button {
                 border-radius: 10px;
                 border: 1px solid %(studio_edge)s;

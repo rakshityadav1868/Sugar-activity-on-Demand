@@ -1669,7 +1669,7 @@ class TestStudioOffscreen(unittest.TestCase):
             % (completed.stdout, completed.stderr))
         self.assertIn('OFFSCREEN-PROMPT-NAME-OK', completed.stdout)
 
-    def test_install_setup_applies_name_license_and_icon_colors(self):
+    def test_install_setup_applies_name_and_license_without_icon_controls(self):
         completed = self._run_offscreen(_OFFSCREEN_INSTALL_SETUP_SCRIPT)
         self.assertEqual(
             0, completed.returncode,
@@ -1754,8 +1754,7 @@ import tempfile
 
 import gi
 gi.require_version('Gtk', '3.0')
-gi.require_version('Gdk', '3.0')
-from gi.repository import Gdk, Gtk
+from gi.repository import Gtk
 
 from core.spec import ActivitySpec
 from generation.generator import create_prototype_activity
@@ -1802,8 +1801,8 @@ def mock_run(dialog):
               if isinstance(widget, Gtk.Label)]
     assert '1  Name your activity' in labels, labels
     assert '2  Choose a license' in labels, labels
-    assert '3  Review your activity icon' in labels, labels
-    assert 'Regenerate with AI' in labels, labels
+    assert '3  Review your activity icon' not in labels, labels
+    assert 'Regenerate with AI' not in labels, labels
 
     entry = next(widget for widget in widgets
                  if isinstance(widget, Gtk.Entry))
@@ -1811,21 +1810,7 @@ def mock_run(dialog):
     license_combo = next(widget for widget in widgets
                          if isinstance(widget, Gtk.ComboBoxText))
     license_combo.set_active_id('GPL-3.0-or-later')
-    color_buttons = [widget for widget in widgets
-                     if isinstance(widget, Gtk.ColorButton)]
-    assert len(color_buttons) == 2, len(color_buttons)
-    outline_button = next(
-        button for button in color_buttons
-        if button.get_title() == 'Choose the icon outline color')
-    fill_button = next(
-        button for button in color_buttons
-        if button.get_title() == 'Choose the icon fill color')
-    outline = Gdk.RGBA()
-    fill = Gdk.RGBA()
-    assert outline.parse('#245A44')
-    assert fill.parse('#D9F0EA')
-    outline_button.set_rgba(outline)
-    fill_button.set_rgba(fill)
+    assert not any(isinstance(widget, Gtk.ColorButton) for widget in widgets)
     return Gtk.ResponseType.ACCEPT
 
 
@@ -1842,8 +1827,7 @@ info = result.files['activity/activity.info']
 assert 'name = My Garden Lab' in info, info
 assert 'license = GPL-3.0-or-later' in info, info
 icon = result.files['activity/activity.svg']
-assert '<!ENTITY stroke_color "#245A44">' in icon, icon[:300]
-assert '<!ENTITY fill_color "#D9F0EA">' in icon, icon[:300]
+assert icon == original_icon
 assert result.bundle_path == '', result.bundle_path
 
 panel.destroy()

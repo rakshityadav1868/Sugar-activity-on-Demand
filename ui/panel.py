@@ -11303,49 +11303,12 @@ if clipboard.wait_is_text_available():
                 _('XO packaged for export or install.'))
         return bundle_path
 
-    @staticmethod
-    def _color_button_hex(button):
-        color = button.get_rgba()
-        return '#%02X%02X%02X' % (
-            int(round(color.red * 255)),
-            int(round(color.green * 255)),
-            int(round(color.blue * 255)),
-        )
-
-    @staticmethod
-    def _set_color_button_hex(button, value):
-        color = Gdk.RGBA()
-        if not color.parse(value):
-            color.parse('#282828')
-        button.set_rgba(color)
-
-    def _request_install_icon_regeneration(self, activity_name):
-        """Return a new sanitized AI icon for the pending install."""
-        if self._generation_result is None:
-            return None
-        from dataclasses import replace
-        from generation.icons import request_icon_svg
-        from service.service import get_service
-
-        service = get_service()
-        provider_name = self._resolve_generation_provider_name(service)
-        provider = service.resolve_provider(provider_name)
-        if provider is None:
-            return None
-        spec = replace(self._generation_result.spec, name=activity_name)
-        plan = dict(self._generation_result.plan)
-        plan['name'] = activity_name
-        return request_icon_svg(provider, spec, plan)
-
     def _prompt_install_setup(self):
-        """Review name, license, and icon before packaging an install."""
+        """Review name and license before packaging an install."""
         if self._generation_result is None:
             return False
 
         from generation.icons import icon_entity_colors
-        from generation.icons import render_activity_icon
-        from generation.icons import sanitize_icon_svg
-        from sugar3.graphics.xocolor import XoColor
 
         result = self._generation_result
         icon_path = os.path.join(
@@ -11355,26 +11318,15 @@ if clipboard.wait_is_text_available():
                 installed_icon = icon_file.read()
         except OSError:
             installed_icon = ''
-        icon_svg = sanitize_icon_svg(installed_icon)
-        if icon_svg is None:
-            icon_svg = sanitize_icon_svg(render_activity_icon(result.plan))
-
         default_stroke, default_fill = icon_entity_colors(installed_icon)
         stroke = result.plan.get('icon_stroke_color', default_stroke)
         fill = result.plan.get('icon_fill_color', default_fill)
-        state = {
-            'icon_svg': icon_svg,
-            'icon_source': result.plan.get('icon_source', 'generated'),
-            'closed': False,
-            'regenerating': False,
-            'preview_paths': [],
-        }
 
         dialog = Gtk.Dialog(transient_for=self.get_toplevel(), modal=True)
         dialog.set_decorated(False)
         dialog.get_style_context().add_class('create-ai-dialog')
         dialog.get_style_context().add_class('create-ai-install-dialog')
-        dialog.set_size_request(style.zoom(620), -1)
+        dialog.set_size_request(style.zoom(520), -1)
 
         cancel_btn = dialog.add_button(_('Cancel'), Gtk.ResponseType.CANCEL)
         cancel_btn.get_style_context().add_class('create-ai-dialog-cancel')
@@ -11450,174 +11402,8 @@ if clipboard.wait_is_text_available():
         license_section.pack_start(license_combo, False, False, 0)
         body.pack_start(license_section, False, False, 0)
 
-        icon_section = Gtk.VBox(spacing=style.zoom(8))
-        icon_title = Gtk.Label(_('3  Review your activity icon'))
-        icon_title.get_style_context().add_class(
-            'create-ai-install-section-title')
-        icon_title.set_xalign(0)
-        icon_section.pack_start(icon_title, False, False, 0)
-
-        icon_row = Gtk.HBox(spacing=style.zoom(18))
-        preview_card = Gtk.EventBox()
-        preview_card.get_style_context().add_class(
-            'create-ai-install-icon-preview')
-        preview_card.set_size_request(style.zoom(150), style.zoom(150))
-        preview_icon = CanvasIcon(
-            file_name=icon_path,
-            pixel_size=style.zoom(110),
-            xo_color=XoColor('%s,%s' % (stroke, fill)),
-        )
-        preview_icon.set_halign(Gtk.Align.CENTER)
-        preview_icon.set_valign(Gtk.Align.CENTER)
-        preview_card.add(preview_icon)
-        icon_row.pack_start(preview_card, False, False, 0)
-
-        controls = Gtk.VBox(spacing=style.zoom(9))
-        controls.set_hexpand(True)
-        source_text = (
-            _('AI-generated icon')
-            if str(state['icon_source']).startswith('ai')
-            else _('Generated icon'))
-        source_label = Gtk.Label(source_text)
-        source_label.get_style_context().add_class(
-            'create-ai-install-icon-source')
-        source_label.set_xalign(0)
-        controls.pack_start(source_label, False, False, 0)
-
-        colors = Gtk.Grid()
-        colors.set_row_spacing(style.zoom(7))
-        colors.set_column_spacing(style.zoom(10))
-        stroke_label = Gtk.Label(_('Outline color'))
-        stroke_label.get_style_context().add_class(
-            'create-ai-install-color-label')
-        stroke_label.set_xalign(0)
-        fill_label = Gtk.Label(_('Fill color'))
-        fill_label.get_style_context().add_class(
-            'create-ai-install-color-label')
-        fill_label.set_xalign(0)
-        stroke_button = Gtk.ColorButton()
-        fill_button = Gtk.ColorButton()
-        self._set_color_button_hex(stroke_button, stroke)
-        self._set_color_button_hex(fill_button, fill)
-        stroke_button.set_title(_('Choose the icon outline color'))
-        fill_button.set_title(_('Choose the icon fill color'))
-        colors.attach(stroke_label, 0, 0, 1, 1)
-        colors.attach(stroke_button, 1, 0, 1, 1)
-        colors.attach(fill_label, 0, 1, 1, 1)
-        colors.attach(fill_button, 1, 1, 1, 1)
-        controls.pack_start(colors, False, False, 0)
-
-        icon_actions = Gtk.HBox(spacing=style.zoom(7))
-        swap_button = Gtk.Button.new_with_label(_('Swap colors'))
-        swap_button.get_style_context().add_class(
-            'create-ai-install-secondary')
-        regenerate_button = Gtk.Button.new_with_label(
-            _('Regenerate with AI'))
-        regenerate_button.get_style_context().add_class(
-            'create-ai-install-secondary')
-        icon_actions.pack_start(swap_button, False, False, 0)
-        icon_actions.pack_start(regenerate_button, False, False, 0)
-        controls.pack_start(icon_actions, False, False, 0)
-        icon_status = Gtk.Label(
-            _('You can recolor the icon or ask the model for another one.'))
-        icon_status.get_style_context().add_class(
-            'create-ai-install-icon-status')
-        icon_status.set_xalign(0)
-        icon_status.set_line_wrap(True)
-        controls.pack_start(icon_status, False, False, 0)
-        icon_row.pack_start(controls, True, True, 0)
-        icon_section.pack_start(icon_row, False, False, 0)
-        body.pack_start(icon_section, False, False, 0)
-
-        def update_preview(unused_button=None):
-            try:
-                preview_icon.props.xo_color = XoColor('%s,%s' % (
-                    self._color_button_hex(stroke_button),
-                    self._color_button_hex(fill_button)))
-                preview_icon.queue_draw()
-            except Exception:
-                logging.exception('Could not recolor install icon preview')
-
-        stroke_button.connect('color-set', update_preview)
-        fill_button.connect('color-set', update_preview)
-
-        def swap_colors(unused_button):
-            old_stroke = self._color_button_hex(stroke_button)
-            old_fill = self._color_button_hex(fill_button)
-            self._set_color_button_hex(stroke_button, old_fill)
-            self._set_color_button_hex(fill_button, old_stroke)
-            update_preview()
-
-        swap_button.connect('clicked', swap_colors)
-
-        def preview_regenerated(svg):
-            if state['closed']:
-                return False
-            state['regenerating'] = False
-            name_entry.set_sensitive(True)
-            license_combo.set_sensitive(True)
-            stroke_button.set_sensitive(True)
-            fill_button.set_sensitive(True)
-            swap_button.set_sensitive(True)
-            regenerate_button.set_sensitive(True)
-            accept_btn.set_sensitive(bool(name_entry.get_text().strip()))
-            safe = sanitize_icon_svg(svg)
-            if safe is None:
-                icon_status.set_text(
-                    _('Could not regenerate the icon. The current icon is '
-                      'still selected.'))
-                return False
-            state['icon_svg'] = safe
-            state['icon_source'] = 'ai-regenerated'
-            try:
-                descriptor, preview_path = tempfile.mkstemp(
-                    prefix='aod-install-icon-', suffix='.svg')
-                os.close(descriptor)
-                with open(preview_path, 'w', encoding='utf-8') as icon_file:
-                    icon_file.write(safe)
-                state['preview_paths'].append(preview_path)
-                preview_icon.props.file_name = preview_path
-                update_preview()
-            except OSError:
-                logging.exception('Could not prepare regenerated icon preview')
-            source_label.set_text(_('New AI-generated icon'))
-            icon_status.set_text(
-                _('New icon ready. You can keep it, recolor it, or '
-                  'regenerate again.'))
-            return False
-
-        def regenerate(unused_button):
-            activity_name = ' '.join(name_entry.get_text().split())
-            if not activity_name:
-                icon_status.set_text(_('Enter an activity name first.'))
-                return
-            state['regenerating'] = True
-            name_entry.set_sensitive(False)
-            license_combo.set_sensitive(False)
-            stroke_button.set_sensitive(False)
-            fill_button.set_sensitive(False)
-            swap_button.set_sensitive(False)
-            regenerate_button.set_sensitive(False)
-            accept_btn.set_sensitive(False)
-            icon_status.set_text(_('Generating another icon…'))
-
-            def worker():
-                try:
-                    svg = self._request_install_icon_regeneration(
-                        activity_name)
-                except Exception:
-                    logging.exception('Could not regenerate activity icon')
-                    svg = None
-                GObject.idle_add(preview_regenerated, svg)
-
-            threading.Thread(target=worker, daemon=True).start()
-
-        regenerate_button.connect('clicked', regenerate)
-
         def name_changed(entry):
-            accept_btn.set_sensitive(
-                bool(entry.get_text().strip()) and
-                not state['regenerating'])
+            accept_btn.set_sensitive(bool(entry.get_text().strip()))
 
         name_entry.connect('changed', name_changed)
         name_changed(name_entry)
@@ -11627,15 +11413,7 @@ if clipboard.wait_is_text_available():
         response = dialog.run()
         activity_name = ' '.join(name_entry.get_text().split())[:80]
         license_id = license_combo.get_active_id() or 'MIT'
-        stroke_color = self._color_button_hex(stroke_button)
-        fill_color = self._color_button_hex(fill_button)
-        state['closed'] = True
         dialog.destroy()
-        for preview_path in state['preview_paths']:
-            try:
-                os.unlink(preview_path)
-            except OSError:
-                pass
 
         if response != Gtk.ResponseType.ACCEPT or not activity_name:
             return False
@@ -11646,10 +11424,10 @@ if clipboard.wait_is_text_available():
                 result,
                 activity_name,
                 license_id,
-                icon_svg=state['icon_svg'],
-                stroke_color=stroke_color,
-                fill_color=fill_color,
-                icon_source=state['icon_source'],
+                icon_svg=installed_icon,
+                stroke_color=stroke,
+                fill_color=fill,
+                icon_source=result.plan.get('icon_source', 'generated'),
             )
         except Exception as error:
             logging.exception('Could not apply install options')
