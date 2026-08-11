@@ -25,6 +25,7 @@ gi.require_version('Gtk', '3.0')
 gi.require_version('Gdk', '3.0')
 from gi.repository import Gtk
 from gi.repository import Gdk
+from gi.repository import GLib
 from gi.repository import GObject
 from gi.repository import Pango
 
@@ -228,7 +229,8 @@ class PreviewActivity(Gtk.Window):
         return tempfile.gettempdir()
 
     def cleanup(self):
-        """Remove the temporary activity root directory if one was created."""
+        """Stop preview-only GLib work and remove its temporary root."""
+        _remove_preview_sources(self)
         root = self._activity_root
         if root and os.path.isdir(root):
             shutil.rmtree(root, ignore_errors=True)
@@ -369,8 +371,9 @@ def _try_exec_preview(patched_source, source_path, bundle_path,
         logging.exception('Preview instance allocation failed')
         return None, 'Activity __init__ failed: %s' % error, None
 
+    instance.__dict__['_preview_glib_source_ids'] = []
     try:
-        instance.__init__(handle=None)
+        _run_tracked_preview_init(instance)
     except SystemExit:
         _dispose_preview_instance(instance)
         return None, (
@@ -410,7 +413,21 @@ def _try_exec_preview(patched_source, source_path, bundle_path,
         _dispose_preview_instance(instance)
         return None, 'Activity did not call set_canvas()', None
 
+    _mark_sugar_preview_root(canvas, 'aod-sugar-preview-canvas')
+    if isinstance(toolbar, Gtk.Widget):
+        _mark_sugar_preview_root(toolbar, 'aod-sugar-preview-toolbar')
+
     return instance, canvas, toolbar
+
+
+def _mark_sugar_preview_root(widget, region_class):
+    """Scope the Studio's Sugar compatibility CSS to preview widgets."""
+    try:
+        context = widget.get_style_context()
+        context.add_class('aod-sugar-preview-root')
+        context.add_class(region_class)
+    except Exception:
+        pass
 
 
 def _has_salvageable_canvas(instance):
@@ -430,15 +447,69 @@ def _has_salvageable_canvas(instance):
 
 def _dispose_preview_instance(instance):
     """Best-effort teardown of a failed preview instance."""
-    try:
-        instance.cleanup()
-    except Exception:
-        pass
+    dispose_activity_preview(instance)
     try:
         if isinstance(instance, Gtk.Widget):
             instance.destroy()
     except Exception:
         pass
+
+
+def dispose_activity_preview(instance):
+    """Stop one embedded activity, including leaked generated timers."""
+    try:
+        instance.cleanup()
+    except Exception:
+        pass
+    # A generated cleanup() override may forget to call its base method.
+    # Invoke the preview base explicitly so tracked GLib sources and the
+    # temporary activity root are always released.
+    try:
+        if isinstance(instance, PreviewActivity):
+            PreviewActivity.cleanup(instance)
+    except Exception:
+        pass
+
+
+def _run_tracked_preview_init(instance):
+    """Construct generated code while recording its persistent GLib work."""
+    source_ids = instance.__dict__.setdefault(
+        '_preview_glib_source_ids', [])
+    originals = {}
+
+    def tracked(name):
+        original = originals[name]
+
+        def schedule(*args, **kwargs):
+            source_id = original(*args, **kwargs)
+            if isinstance(source_id, int) and source_id > 0:
+                source_ids.append(source_id)
+            return source_id
+        return schedule
+
+    for name in ('timeout_add', 'timeout_add_seconds', 'idle_add'):
+        original = getattr(GLib, name, None)
+        if callable(original):
+            originals[name] = original
+    try:
+        for name in originals:
+            setattr(GLib, name, tracked(name))
+        instance.__init__(handle=None)
+    finally:
+        for name, original in originals.items():
+            setattr(GLib, name, original)
+
+
+def _remove_preview_sources(instance):
+    source_ids = getattr(instance, '_preview_glib_source_ids', None)
+    if not isinstance(source_ids, list):
+        return
+    while source_ids:
+        source_id = source_ids.pop()
+        try:
+            GLib.source_remove(source_id)
+        except Exception:
+            pass
 
 
 def _harden_imports(source, aggressive=False):
