@@ -48,6 +48,11 @@ class AODJob:
     parent_revision_id: str = ''
     user_prompt: str = ''
     enhance: bool = True
+    # Normalized reference pixels are intentionally memory-only. They are
+    # available to the active worker but never included in to_dict(), job JSON,
+    # session history, logs, or saved projects.
+    reference_image_data: bytes = field(default=b'', repr=False)
+    reference_image_mime_type: str = ''
     enhanced_prompt: str = ''
     status: str = STATUS_QUEUED
     stage: str = STATUS_QUEUED
@@ -71,7 +76,14 @@ class AODJob:
     @classmethod
     def create(cls, spec, provider_name='default', use_rag=True,
                validate_code=True, output_root=None, session_id='',
-               parent_revision_id='', user_prompt='', enhance=True):
+               parent_revision_id='', user_prompt='', enhance=True,
+               reference_image_data=None,
+               reference_image_mime_type=''):
+        image_data = reference_image_data \
+            if isinstance(reference_image_data, bytes) else b''
+        mime_type = reference_image_mime_type \
+            if image_data and reference_image_mime_type in (
+                'image/png', 'image/jpeg') else ''
         return cls(
             job_id=uuid.uuid4().hex,
             spec=spec.normalized(),
@@ -83,6 +95,8 @@ class AODJob:
             parent_revision_id=parent_revision_id or '',
             user_prompt=user_prompt or spec.prompt,
             enhance=bool(enhance),
+            reference_image_data=image_data if mime_type else b'',
+            reference_image_mime_type=mime_type,
         )
 
     @classmethod

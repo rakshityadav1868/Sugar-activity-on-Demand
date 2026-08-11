@@ -66,7 +66,9 @@ class AODService:
     def submit_activity(self, spec, provider_name='default', use_rag=True,
                         validate_code=True, output_root=None, callback=None,
                         session_id='', parent_revision_id='',
-                        user_prompt=None, enhance=True):
+                        user_prompt=None, enhance=True,
+                        reference_image_data=None,
+                        reference_image_mime_type=''):
         errors = spec.validate()
         if errors:
             raise ValueError('\n'.join(errors))
@@ -86,6 +88,8 @@ class AODService:
             parent_revision_id=parent_revision_id,
             user_prompt=prompt_text,
             enhance=enhance,
+            reference_image_data=reference_image_data,
+            reference_image_mime_type=reference_image_mime_type,
         )
         if callback is not None:
             self.watch(job.job_id, callback)
@@ -499,6 +503,9 @@ class AODService:
                     package_bundle=False,
                     enhance=job.enhance,
                     cancel_check=lambda: job.cancel_requested,
+                    reference_image_data=job.reference_image_data,
+                    reference_image_mime_type=(
+                        job.reference_image_mime_type),
                 )
         except JobCancelled:
             self._mark_cancelled(job)
@@ -642,6 +649,8 @@ class AODService:
             package_bundle=False,
             validate_code=job.validate_code,
             cancel_check=lambda: job.cancel_requested,
+            reference_image_data=job.reference_image_data,
+            reference_image_mime_type=job.reference_image_mime_type,
         )
 
     def _run_resume_job(self, job, provider):

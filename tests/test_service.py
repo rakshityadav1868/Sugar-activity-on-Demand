@@ -175,6 +175,29 @@ class TestAodService(unittest.TestCase):
         self.assertEqual('org.sugarlabs.aod.Demo1234567890',
                          restored.repair_plan['bundle_id'])
 
+    def test_reference_pixels_are_memory_only_and_not_persisted(self):
+        spec = ActivitySpec(
+            'Private Reference', 'Match this image.', 'creation', 'MIT')
+        private_pixels = b'private-normalized-image-pixels'
+        job = AODJob.create(
+            spec,
+            provider_name='openrouter',
+            reference_image_data=private_pixels,
+            reference_image_mime_type='image/png',
+        )
+
+        self.assertEqual(private_pixels, job.reference_image_data)
+        self.assertEqual('image/png', job.reference_image_mime_type)
+        serialized = json.dumps(job.to_dict())
+        self.assertNotIn('reference_image_data', serialized)
+        self.assertNotIn('reference_image_mime_type', serialized)
+        self.assertNotIn(private_pixels.decode('ascii'), serialized)
+
+        self.store.save(job)
+        restored = self.store.load(job.job_id)
+        self.assertEqual(b'', restored.reference_image_data)
+        self.assertEqual('', restored.reference_image_mime_type)
+
     def test_resume_repair_finishes_from_preserved_draft(self):
         from generation.generator import enrich_plan
         from generation.templates import render_activity_source
