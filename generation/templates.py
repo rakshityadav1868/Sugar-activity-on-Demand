@@ -32,19 +32,22 @@ def _render_shell(spec, plan, body):
         from sugar3.activity import activity
         from sugar3.activity.widgets import ActivityToolbarButton
         from sugar3.activity.widgets import StopButton
+        from sugar3.graphics.alert import NotifyAlert
         from sugar3.graphics import style
+        from sugar3.graphics.icon import Icon
         from sugar3.graphics.toolbarbox import ToolbarBox
+        from sugar3.graphics.toolbutton import ToolButton
 
 
         ACTIVITY_TITLE = {title}
         LEARNER_GOAL = {goal}
+        LEARNER_STEPS = {steps}
 
 
         class GeneratedActivity(activity.Activity):
             def __init__(self, handle):
                 activity.Activity.__init__(self, handle)
                 self.max_participants = 1
-                self._install_styles()
                 self._build_toolbar()
                 self._build_canvas()
 
@@ -52,6 +55,11 @@ def _render_shell(spec, plan, body):
                 toolbar_box = ToolbarBox()
                 toolbar = toolbar_box.toolbar
                 toolbar.insert(ActivityToolbarButton(self), 0)
+                self._add_activity_toolbar_items(toolbar)
+                help_button = ToolButton('dialog-information')
+                help_button.set_tooltip(_('Show the learning goal'))
+                help_button.connect('clicked', self._show_learning_goal)
+                toolbar.insert(help_button, -1)
                 separator = Gtk.SeparatorToolItem()
                 separator.props.draw = False
                 separator.set_expand(True)
@@ -60,64 +68,63 @@ def _render_shell(spec, plan, body):
                 self.set_toolbar_box(toolbar_box)
                 toolbar_box.show_all()
 
-            def _install_styles(self):
-                # One Sugar-consistent stylesheet for every generated
-                # activity: bold titles, muted goal/status text, padded
-                # panels -- all sized with style.zoom so it tracks the
-                # learner's display.
-                try:
-                    screen = Gdk.Screen.get_default()
-                    # The stylesheet is identical for every shell-rendered
-                    # activity, and the studio previews activities
-                    # in-process -- guard so repeated previews don't stack
-                    # screen-wide providers forever.
-                    if screen is None or getattr(
-                            screen, '_aod_tpl_styles_done', False):
-                        return
-                    css = (
-                        '.aod-title {{ font-weight: bold;'
-                        ' font-size: %dpx; }}'
-                        '.aod-goal {{ color: %s; }}'
-                        '.aod-status {{ color: %s; }}'
-                        '.aod-panel {{ padding: %dpx; }}'
-                    ) % (
-                        style.zoom(15),
-                        style.COLOR_BUTTON_GREY.get_html(),
-                        style.COLOR_SELECTION_GREY.get_html(),
-                        style.zoom(10),
-                    )
-                    provider = Gtk.CssProvider()
-                    provider.load_from_data(css.encode('utf-8'))
-                    Gtk.StyleContext.add_provider_for_screen(
-                        screen, provider,
-                        Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
-                    screen._aod_tpl_styles_done = True
-                except Exception:
-                    pass
+            def _add_activity_toolbar_items(self, toolbar):
+                # Individual templates override this for primary actions.
+                pass
+
+            def _show_learning_goal(self, button):
+                alert = NotifyAlert(timeout=5)
+                alert.props.title = ACTIVITY_TITLE
+                message = LEARNER_GOAL
+                if LEARNER_STEPS:
+                    message += '\\n\\n' + '\\n'.join(
+                        '%d. %s' % (index, step)
+                        for index, step in enumerate(LEARNER_STEPS, 1))
+                alert.props.msg = message
+                self.add_alert(alert)
+                alert.connect('response', lambda alert_, response:
+                              self.remove_alert(alert_))
 
             def _make_title(self, text):
                 label = Gtk.Label()
                 label.set_markup(
                     '<b>%s</b>' % GLib.markup_escape_text(str(text)))
                 label.set_xalign(0)
-                label.get_style_context().add_class('aod-title')
                 return label
 
             def _standard_canvas(self):
-                # A titled, evenly spaced panel shared by every template so
-                # the activity reads as a real Sugar activity, not a bare
-                # GTK window.
+                # Keep Sugar chrome compact, then give the learner one native
+                # icon-and-instruction row before the expanding work surface.
+                # This is intentionally a plain Sugar row, never a web card.
                 canvas = Gtk.Box(orientation=Gtk.Orientation.VERTICAL,
-                                 spacing=style.zoom(10))
-                canvas.set_border_width(style.zoom(18))
-                canvas.get_style_context().add_class('aod-panel')
-                canvas.pack_start(
-                    self._make_title(ACTIVITY_TITLE), False, False, 0)
-                goal = Gtk.Label(label=LEARNER_GOAL)
-                goal.set_line_wrap(True)
-                goal.set_xalign(0)
-                goal.get_style_context().add_class('aod-goal')
-                canvas.pack_start(goal, False, False, 0)
+                                 spacing=style.DEFAULT_SPACING)
+                canvas.set_border_width(style.DEFAULT_SPACING)
+
+                orientation = Gtk.Box(
+                    orientation=Gtk.Orientation.HORIZONTAL,
+                    spacing=style.DEFAULT_SPACING)
+                orientation.set_margin_bottom(style.DEFAULT_PADDING)
+
+                activity_icon = Icon(
+                    file=(self.get_bundle_path() +
+                          '/activity/activity.svg'),
+                    pixel_size=style.STANDARD_ICON_SIZE,
+                    stroke_color=style.COLOR_TOOLBAR_GREY.get_svg(),
+                    fill_color=style.COLOR_INACTIVE_FILL.get_svg())
+                activity_icon.set_valign(Gtk.Align.CENTER)
+                orientation.pack_start(activity_icon, False, False, 0)
+
+                instruction = Gtk.Label(label=LEARNER_GOAL)
+                instruction.set_xalign(0)
+                instruction.set_line_wrap(True)
+                instruction.set_max_width_chars(72)
+                instruction.set_valign(Gtk.Align.CENTER)
+                orientation.pack_start(instruction, True, True, 0)
+                canvas.pack_start(orientation, False, False, 0)
+
+                divider = Gtk.Separator(
+                    orientation=Gtk.Orientation.HORIZONTAL)
+                canvas.pack_start(divider, False, False, 0)
                 return canvas
 
         {body}
@@ -126,6 +133,7 @@ def _render_shell(spec, plan, body):
         license_id=spec.license_id,
         title=json.dumps(spec.name),
         goal=json.dumps(spec.learner_goal or plan['learner_goal']),
+        steps=json.dumps(plan.get('learner_steps') or []),
         body=_indent(body.rstrip(), 4),
     )
 
@@ -133,6 +141,12 @@ def _render_shell(spec, plan, body):
 def _render_canvas(spec, plan):
     return dedent(
         '''\
+        def _add_activity_toolbar_items(self, toolbar):
+            clear_button = ToolButton('edit-clear')
+            clear_button.set_tooltip(_('Clear the drawing'))
+            clear_button.connect('clicked', self._clear_drawing)
+            toolbar.insert(clear_button, -1)
+
         def _build_canvas(self):
             self._points = []
             canvas = self._standard_canvas()
@@ -147,11 +161,6 @@ def _render_canvas(spec, plan):
             self._drawing.connect('draw', self._draw_canvas)
             self._drawing.set_tooltip_text(_('Click and drag to draw'))
             canvas.pack_start(self._drawing, True, True, 0)
-
-            clear_button = Gtk.Button(label=_('Clear drawing'))
-            clear_button.set_tooltip_text(_('Erase everything on the canvas'))
-            clear_button.connect('clicked', self._clear_drawing)
-            canvas.pack_start(clear_button, False, False, 0)
 
             self.set_canvas(canvas)
             canvas.show_all()
@@ -254,6 +263,12 @@ def _render_grid(spec, plan):
 def _render_chess(spec, plan):
     body = dedent(
         '''\
+        def _add_activity_toolbar_items(self, toolbar):
+            reset_button = ToolButton('view-refresh')
+            reset_button.set_tooltip(_('Start a fresh game'))
+            reset_button.connect('clicked', self._reset_board)
+            toolbar.insert(reset_button, -1)
+
         def _build_canvas(self):
             self._selected_square = None
             self._turn = 'w'
@@ -276,7 +291,7 @@ def _render_chess(spec, plan):
             canvas.pack_start(play_area, True, True, 0)
 
             board_frame = Gtk.Alignment(xalign=0.5, yalign=0.5,
-                                        xscale=0, yscale=0)
+                                        xscale=1, yscale=1)
             board_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL,
                                 spacing=6)
             board_frame.add(board_box)
@@ -285,10 +300,11 @@ def _render_chess(spec, plan):
                                 spacing=1)
             files_top.set_halign(Gtk.Align.CENTER)
             files_top.pack_start(Gtk.Label(label='  '), False, False, 0)
+            self._file_labels = []
             for file_name in 'abcdefgh':
                 label = Gtk.Label(label=file_name)
-                label.set_size_request(64, 18)
                 files_top.pack_start(label, False, False, 0)
+                self._file_labels.append(label)
             board_box.pack_start(files_top, False, False, 0)
 
             board_rows = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL,
@@ -296,37 +312,31 @@ def _render_chess(spec, plan):
             board_box.pack_start(board_rows, False, False, 0)
             ranks = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
             board_rows.pack_start(ranks, False, False, 0)
+            self._rank_labels = []
             self._grid = Gtk.Grid(row_spacing=1, column_spacing=1)
             board_rows.pack_start(self._grid, False, False, 0)
 
             for row in range(8):
-                ranks.pack_start(
-                    Gtk.Label(label=str(8 - row)), False, False, 0)
+                rank_label = Gtk.Label(label=str(8 - row))
+                ranks.pack_start(rank_label, False, False, 0)
+                self._rank_labels.append(rank_label)
                 button_row = []
                 for col in range(8):
                     button = Gtk.Button()
-                    button.set_size_request(style.zoom(56), style.zoom(52))
+                    initial_cell = (
+                        style.GRID_CELL_SIZE - style.DEFAULT_SPACING)
+                    button.set_size_request(initial_cell, initial_cell)
                     button.connect('clicked', self._square_clicked, row, col)
                     self._grid.attach(button, col, row, 1, 1)
                     button_row.append(button)
                 self._buttons.append(button_row)
             play_area.pack_start(board_frame, True, True, 0)
+            play_area.connect('size-allocate', self._resize_chess_board)
 
             side_panel = Gtk.Box(orientation=Gtk.Orientation.VERTICAL,
                                  spacing=style.zoom(10))
             side_panel.set_size_request(style.zoom(300), -1)
             play_area.pack_start(side_panel, False, False, 0)
-
-            prompt = Gtk.Label(
-                label=_('Before each move, say your idea out loud or type it '
-                        'below.'))
-            prompt.set_line_wrap(True)
-            side_panel.pack_start(prompt, False, False, 0)
-
-            self._lesson_steps_label = Gtk.Label()
-            self._lesson_steps_label.set_xalign(0)
-            self._lesson_steps_label.set_line_wrap(True)
-            side_panel.pack_start(self._lesson_steps_label, False, False, 0)
 
             self._move_idea = Gtk.Entry()
             self._move_idea.set_placeholder_text(
@@ -358,19 +368,41 @@ def _render_chess(spec, plan):
 
             controls = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL,
                                spacing=style.zoom(8))
-            reset_button = Gtk.Button(label=_('Reset board'))
-            reset_button.set_tooltip_text(_('Start a fresh game'))
-            reset_button.connect('clicked', self._reset_board)
-            controls.pack_start(reset_button, False, False, 0)
             controls.pack_start(
                 Gtk.Label(label=_('Click a piece, then its destination.')),
                 False, False, 0)
             side_panel.pack_start(controls, False, False, 0)
 
             self.set_canvas(canvas)
-            self._update_lesson_steps()
             self._refresh_board()
             canvas.show_all()
+
+        def _resize_chess_board(self, widget, allocation):
+            panel_width = min(
+                style.GRID_CELL_SIZE * 4,
+                max(style.GRID_CELL_SIZE * 2, allocation.width // 3),
+            )
+            available_width = max(
+                style.GRID_CELL_SIZE * 4,
+                allocation.width - panel_width -
+                style.DEFAULT_SPACING * 3,
+            )
+            available_height = max(
+                style.GRID_CELL_SIZE * 4,
+                allocation.height - style.DEFAULT_SPACING * 2,
+            )
+            cell = max(
+                style.zoom(32),
+                min(available_width // 8, available_height // 8,
+                    style.GRID_CELL_SIZE),
+            )
+            for row in self._buttons:
+                for button in row:
+                    button.set_size_request(cell, cell)
+            for label in self._file_labels:
+                label.set_size_request(cell, style.DEFAULT_SPACING)
+            for label in self._rank_labels:
+                label.set_size_request(style.DEFAULT_SPACING, cell)
 
         def _starting_board(self):
             return [
@@ -560,14 +592,6 @@ def _render_chess(spec, plan):
             self._captured_white.set_text(_('White captured: %s') % white)
             self._captured_black.set_text(_('Black captured: %s') % black)
 
-        def _update_lesson_steps(self):
-            text = '\\n'.join(
-                '%d. %s' % (index, step)
-                for index, step in enumerate(self._lesson_steps, 1)
-            )
-            self._lesson_steps_label.set_text(
-                text or _('Take turns, explain moves, then save to Journal.'))
-
         def _update_move_log(self):
             if self._move_log_view is None:
                 return
@@ -677,9 +701,7 @@ def _render_chess(spec, plan):
         "    self._captured = {'w': [], 'b': []}\n",
         "    self._captured = {'w': [], 'b': []}\n"
         "    self._show_move_log = %s\n" %
-        ('True' if plan.get('chess_show_move_log', True) else 'False') +
-        "    self._lesson_steps = %s\n" %
-        json.dumps(plan.get('learner_steps') or []),
+        ('True' if plan.get('chess_show_move_log', True) else 'False'),
         1,
     )
 
@@ -687,6 +709,12 @@ def _render_chess(spec, plan):
 def _render_carrom(spec, plan):
     return dedent(
         '''\
+        def _add_activity_toolbar_items(self, toolbar):
+            reset_button = ToolButton('view-refresh')
+            reset_button.set_tooltip(_('Start a fresh match'))
+            reset_button.connect('clicked', self._reset_match)
+            toolbar.insert(reset_button, -1)
+
         def _build_canvas(self):
             self._active_player = 'A'
             self._scores = {'A': 0, 'B': 0}
@@ -750,8 +778,6 @@ def _render_carrom(spec, plan):
                 (_('Foul'), self._record_foul, None, _('Record a foul')),
                 (_('Switch turn'), self._switch_turn, None,
                  _('Pass play to the other player')),
-                (_('Reset match'), self._reset_match, None,
-                 _('Start the match over')),
             )
             for index, item in enumerate(buttons):
                 label, callback, value, tip = item
@@ -1115,6 +1141,12 @@ def _render_quiz(spec, plan):
     ]
     return dedent(
         '''\
+        def _add_activity_toolbar_items(self, toolbar):
+            check_button = ToolButton('dialog-ok')
+            check_button.set_tooltip(_('Check the current answer'))
+            check_button.connect('clicked', self._check_answer)
+            toolbar.insert(check_button, -1)
+
         def _build_canvas(self):
             self._questions = __QUESTIONS__
             self._question_index = 0
@@ -1131,14 +1163,8 @@ def _render_quiz(spec, plan):
             self._answer_entry.connect('activate', self._check_answer)
             canvas.pack_start(self._answer_entry, False, False, 0)
 
-            check_button = Gtk.Button(label=_('Check answer'))
-            check_button.set_tooltip_text(
-                _('Check your answer and keep score'))
-            check_button.connect('clicked', self._check_answer)
-            canvas.pack_start(check_button, False, False, 0)
-
             self._feedback = Gtk.Label(
-                label=_('Answer, then check your work.'))
+                label=_('Answer, then use the check button in the toolbar.'))
             self._feedback.get_style_context().add_class('aod-status')
             canvas.pack_start(self._feedback, False, False, 0)
             self._show_question()

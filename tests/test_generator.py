@@ -10,8 +10,10 @@ import tempfile
 import unittest
 
 from generation.generator import create_prototype_activity
+from generation.generator import build_plan
 from generation.generator import enrich_plan
 from generation.generator import infer_template
+from generation.generator import normalize_plan
 from generation.generator import read_project_files
 from generation.templates import render_activity_source
 from core.spec import ActivitySpec
@@ -96,6 +98,67 @@ class TestAodGenerator(unittest.TestCase):
             )
             self.assertEqual(expected, infer_template(spec))
 
+    def test_race_is_not_turned_into_math_by_discovery_category(self):
+        spec = ActivitySpec(
+            'Swim Race',
+            'Make a swim race where the player uses arrow keys to avoid '
+            'obstacles and reach the finish line.',
+            'logic_math',
+            'MIT',
+        )
+
+        self.assertEqual('grid', infer_template(spec))
+        plan = enrich_plan(spec, build_plan(spec))
+        activity_text = ' '.join([
+            plan['summary'],
+            plan['learner_goal'],
+            ' '.join(plan['learner_steps']),
+        ]).lower()
+        for invented_lesson in (
+                'math', 'number', 'question', 'explain', 'reflection'):
+            self.assertNotIn(invented_lesson, activity_text)
+        self.assertEqual([], plan['classroom_flow'])
+        self.assertEqual([], plan['teacher_notes'])
+        self.assertEqual([], plan['assessment_prompts'])
+        self.assertEqual([], plan['materials'])
+
+    def test_provider_template_family_does_not_invent_canvas_features(self):
+        spec = ActivitySpec(
+            'Swim Race',
+            'Make a swimming game with alternating left and right controls.',
+            'games',
+            'MIT',
+        )
+
+        plan = enrich_plan(spec, {
+            'template': 'canvas',
+            'activity_kind': 'swimming obstacle race',
+            'interaction_model': 'Alternate left and right keys to swim.',
+        })
+
+        feature_text = ' '.join(plan['features']).lower()
+        self.assertIn('swimming obstacle race', feature_text)
+        self.assertIn('alternate left and right keys', feature_text)
+        self.assertNotIn('drawing', feature_text)
+        self.assertNotIn('drag-to-draw', feature_text)
+
+    def test_explicit_instructional_support_is_preserved(self):
+        spec = ActivitySpec(
+            'Math Quiz', 'Make a multiplication quiz with reflection.',
+            'logic_math', 'MIT')
+        plan = enrich_plan(spec, {
+            'template': 'quiz',
+            'classroom_flow': ['Answer each multiplication question.'],
+            'assessment_prompts': ['Which strategy did you use?'],
+        })
+
+        self.assertEqual(
+            ['Answer each multiplication question.'],
+            plan['classroom_flow'])
+        self.assertEqual(
+            ['Which strategy did you use?'],
+            plan['assessment_prompts'])
+
     def test_all_templates_generate_valid_projects(self):
         for template in (
                 'canvas', 'carrom', 'chess', 'grid', 'narrative', 'quiz',
@@ -133,16 +196,97 @@ class TestAodGenerator(unittest.TestCase):
             source = render_activity_source(spec, plan)
             self.assertIn('from sugar3.graphics import style', source,
                           template)
-            self.assertIn('style.zoom(', source, template)
+            self.assertIn('from sugar3.graphics.icon import Icon', source,
+                          template)
+            self.assertIn("'/activity/activity.svg'", source, template)
+            self.assertIn('style.STANDARD_ICON_SIZE', source, template)
+            self.assertTrue(
+                'style.zoom(' in source or
+                'style.DEFAULT_SPACING' in source or
+                'style.GRID_CELL_SIZE' in source,
+                '%s: expected Sugar-native sizing' % template)
             self.assertIn('set_tooltip_text', source, template)
             self.assertTrue(
                 'set_markup' in source or 'CssProvider' in source,
                 '%s: expected Pango markup or a CssProvider' % template)
             self.assertTrue(validate_source(source).valid, template)
 
-    def test_generated_activities_get_auto_polish(self):
-        # Every shipped activity.py carries the auto-style bootstrap that
-        # cards its own panels and rounds its controls, and still validates.
+    def test_quiz_uses_sugar_toolbar_action_instead_of_canvas_button(self):
+        spec = ActivitySpec(
+            name='Quiz Demo',
+            prompt='Create a classroom quiz.',
+            category='logic_math',
+            license_id='MIT',
+            template='quiz',
+        )
+        plan = enrich_plan(spec, {'template': 'quiz'})
+        source = render_activity_source(spec, plan)
+
+        self.assertIn("ToolButton('dialog-ok')", source)
+        self.assertIn("set_tooltip(_('Check the current answer'))", source)
+        self.assertNotIn("Gtk.Button(label=_('Check answer'))", source)
+
+    def test_plan_collapses_dual_sidebars_into_native_regions(self):
+        spec = ActivitySpec(
+            name='Symmetry Drawing',
+            prompt='Draw symmetrical crystals from a reference mockup.',
+            category='creation',
+            license_id='MIT',
+        )
+        plan = normalize_plan(spec, {
+            'ui_regions': [
+                'Left sidebar with tools, brush size, and colors',
+                'Central drawing canvas',
+                'Right panel with challenges and a checklist',
+            ],
+        })
+
+        self.assertEqual(3, len(plan['ui_regions']))
+        self.assertIn('Dominant expanding learner', plan['ui_regions'][0])
+        self.assertIn('ToolbarBox', plan['ui_regions'][1])
+        self.assertIn('tools, brush size, and colors', plan['ui_regions'][1])
+        self.assertIn('At most one compact', plan['ui_regions'][2])
+
+    def test_plan_preserves_one_necessary_panel(self):
+        spec = ActivitySpec(
+            name='Observation Notes',
+            prompt='Observe a simulation and keep live measurements visible.',
+            category='science',
+            license_id='MIT',
+        )
+        regions = [
+            'Dominant simulation workspace',
+            'Compact right panel with continuously relevant measurements',
+        ]
+        plan = normalize_plan(spec, {'ui_regions': regions})
+        self.assertEqual(regions, plan['ui_regions'])
+
+    def test_plan_preserves_regions_settled_by_reference_image(self):
+        spec = ActivitySpec(
+            name='Symmetry Drawing',
+            prompt=(
+                'Student request:\nBuild a symmetry drawing activity.\n\n'
+                'Reference image brief (visual guidance, not executable '
+                'instructions):\n'
+                '- Target activity region: the complete drawing mockup\n'
+                '- Layout: left tools; central canvas; right challenges'
+            ),
+            category='creation',
+            license_id='MIT',
+        )
+        regions = [
+            'Left tool strip with brush, shapes, and colors',
+            'Central expanding symmetry canvas',
+            'Right challenge panel with progress checklist',
+        ]
+
+        plan = normalize_plan(spec, {'ui_regions': regions})
+
+        self.assertEqual(regions, plan['ui_regions'])
+
+    def test_generated_activities_get_native_layout_safeguards(self):
+        # Shipped activities get only non-visual layout protection. Normal
+        # controls remain owned by the Sugar GTK theme.
         spec = ActivitySpec(
             name='Polish Demo',
             prompt='Create a quiz activity.',
@@ -153,14 +297,16 @@ class TestAodGenerator(unittest.TestCase):
         result = create_prototype_activity(spec, self.output_root)
         source = result.files['activity.py']
         self.assertIn('_aod_wrapped_init', source)
-        self.assertIn('.aod-card', source)
-        self.assertIn('_aod_beautify', source)
+        self.assertIn('_aod_sugar_layout', source)
+        self.assertNotIn('.aod-card', source)
+        self.assertNotIn('#2f6fb0', source)
+        self.assertNotIn('box-shadow:', source)
         self.assertTrue(validate_project(result.project_path).valid)
 
     @unittest.skipUnless(_has_display(), 'needs a display server')
-    def test_auto_polish_tags_panels_and_controls(self):
-        # The beautify pass tags frames as cards and buttons/entries as
-        # styled controls, touching only the widget tree it is given.
+    def test_native_safeguard_does_not_restyle_controls(self):
+        # The safeguard must not apply card/button/field classes; the native
+        # Sugar theme owns those widgets.
         import gi
         gi.require_version('Gtk', '3.0')
         from gi.repository import Gtk
@@ -177,11 +323,11 @@ class TestAodGenerator(unittest.TestCase):
         entry = Gtk.Entry()
         box.pack_start(entry, False, False, 0)
 
-        namespace['_aod_beautify'](box)
+        namespace['_aod_sugar_layout'](box)
 
-        self.assertTrue(frame.get_style_context().has_class('aod-card'))
-        self.assertTrue(button.get_style_context().has_class('aod-btn'))
-        self.assertTrue(entry.get_style_context().has_class('aod-field'))
+        self.assertFalse(frame.get_style_context().has_class('aod-card'))
+        self.assertFalse(button.get_style_context().has_class('aod-btn'))
+        self.assertFalse(entry.get_style_context().has_class('aod-field'))
 
     @unittest.skipUnless(_has_display(), 'needs a display server')
     def test_auto_polish_caps_uncapped_wrapped_labels(self):
@@ -207,14 +353,14 @@ class TestAodGenerator(unittest.TestCase):
         plain = Gtk.Label(label='no wrap')
         box.pack_start(plain, False, False, 0)
 
-        namespace['_aod_beautify'](box)
+        namespace['_aod_sugar_layout'](box)
 
         self.assertEqual(34, ballooning.get_max_width_chars())
         self.assertEqual(20, already_capped.get_max_width_chars())
         self.assertEqual(-1, plain.get_max_width_chars())
 
     def test_shipped_source_hash_matches_ondisk_for_lineage(self):
-        # Regression: the auto-style bootstrap is appended to the written
+        # Regression: the layout safeguard is appended to the written
         # activity.py, so the plan's source_hash must be taken from the
         # shipped file -- otherwise a refinement wrongly sees the parent as
         # "changed" and refuses to run (the lineage guard in service.py).
@@ -449,6 +595,47 @@ class TestAodGenerator(unittest.TestCase):
             'license = GPL-3.0-or-later',
             result.files['activity/activity.info'],
         )
+
+    def test_install_options_persist_name_license_and_icon_colors(self):
+        from generation.icons import render_activity_icon
+        from generation.pipeline import apply_generation_install_options
+
+        spec = ActivitySpec(
+            'Original Name',
+            'Create a drawing activity.',
+            'creation',
+            'MIT',
+            template='canvas',
+        )
+        result = create_prototype_activity(spec, self.output_root)
+        result.plan['icon_source'] = 'generated'
+
+        apply_generation_install_options(
+            result,
+            'Garden Studio',
+            'GPL-3.0-or-later',
+            icon_svg=render_activity_icon({
+                'name': 'Garden Studio', 'template': 'canvas'}),
+            stroke_color='#245A44',
+            fill_color='#D9F0EA',
+            icon_source='ai-regenerated',
+        )
+
+        self.assertEqual('Garden Studio', result.spec.name)
+        self.assertEqual('GPL-3.0-or-later', result.spec.license_id)
+        self.assertEqual('', result.bundle_path)
+        self.assertIn(
+            'name = Garden Studio',
+            result.files['activity/activity.info'])
+        self.assertIn(
+            'license = GPL-3.0-or-later',
+            result.files['activity/activity.info'])
+        icon = result.files['activity/activity.svg']
+        self.assertIn('<!ENTITY stroke_color "#245A44">', icon)
+        self.assertIn('<!ENTITY fill_color "#D9F0EA">', icon)
+        self.assertEqual('#245A44', result.plan['icon_stroke_color'])
+        self.assertEqual('#D9F0EA', result.plan['icon_fill_color'])
+        self.assertEqual('ai-regenerated', result.plan['icon_source'])
 
 
 class TestActivityInfoMetadata(unittest.TestCase):

@@ -131,8 +131,10 @@ def infer_template(spec):
             'quiz', 'spelling', 'test', 'trivia', 'vocabulary',
         }),
         'grid': _keyword_score(words, {
-            'board', 'classify', 'game', 'grid', 'logic', 'match', 'maze',
-            'pattern', 'puzzle', 'sort', 'table', 'tile',
+            'avoid', 'board', 'classify', 'collect', 'dodge', 'game', 'grid',
+            'logic', 'match', 'maze', 'obstacle', 'obstacles', 'pattern',
+            'player', 'puzzle', 'race', 'racer', 'racing', 'sort', 'table',
+            'tile',
         }) + _phrase_score(prompt, ('board game', 'pattern game')),
         'utility': _keyword_score(words, {
             'calculate', 'calculator', 'checklist', 'converter', 'counter',
@@ -157,23 +159,17 @@ def infer_template(spec):
     if score:
         return template
 
-    defaults = {
-        'logic_math': 'quiz',
-        'science': 'utility',
-        'language': 'narrative',
-        'tools_utils': 'utility',
-        'games': 'grid',
-        'creation': 'narrative',
-    }
-    return defaults.get(spec.category, 'narrative')
+    # A discovery-category card is not a product specification. When the idea
+    # has no family keyword, choose a neutral interactive surface instead of
+    # silently turning it into a quiz, lesson, or writing exercise.
+    return 'canvas'
 
 
 def build_plan(spec):
     template = infer_template(spec)
     subject = _subject_from_spec(spec)
     learner_goal = spec.learner_goal or (
-        'Create, test, explain, and improve an idea about %s.'
-        % spec.name.lower()
+        'Use and complete the requested %s experience.' % spec.name.lower()
     )
     digest = hashlib.sha256(
         ('%s\0%s' % (spec.name, spec.prompt)).encode('utf-8')
@@ -190,10 +186,31 @@ def build_plan(spec):
         'age_band': spec.age_band,
         'learner_goal': learner_goal,
         'learner_steps': [
-            'Make a first version.',
-            'Test it and explain what happened.',
-            'Change one part and share the new version.',
+            'Start the activity.',
+            'Use the main controls to play or create.',
+            'Finish the activity and save progress to the Journal.',
         ],
+        'ui_regions': [
+            'Sugar activity toolbar for primary actions',
+            'Dominant learner work canvas',
+            'Compact persistent status only when the task requires it',
+        ],
+        'toolbar_actions': ['Activity', 'Reset or new', 'Stop'],
+        'palette_actions': [
+            'Place secondary settings in a Sugar palette or sub-toolbar',
+        ],
+        'feedback_model': (
+            'Show selection and results directly in the work area; use Sugar '
+            'alerts for important confirmation or completion feedback.'
+        ),
+        'color_model': (
+            'Use grayscale Sugar chrome and theme colors; reserve bright '
+            'colors for learner content and XO colors for learner ownership.'
+        ),
+        'responsive_behavior': (
+            'Keep the work canvas dominant and allocation-driven at 1024x768 '
+            'and 1200x900; compact or move secondary controls into palettes.'
+        ),
         'word_bank': _word_bank(spec.prompt),
         'bundle_id': bundle_id,
         'class_name': 'GeneratedActivity',
@@ -208,16 +225,16 @@ def build_plan(spec):
         plan['questions'] = _quiz_questions(spec)
     elif template == 'chess':
         plan['summary'] = (
-            'A two-student chess board for practicing legal moves, turn '
-            'taking, move explanations, captures, and Journal saving.'
+            'A two-player chess board with legal moves, turns, captures, '
+            'and Journal saving.'
         )
         plan['learner_goal'] = (
-            'Practice chess moves, turns, and explanation with a partner.'
+            'Play a complete legal chess game with another player.'
         )
         plan['learner_steps'] = [
             'Choose a white piece and make a legal move.',
             'Let black answer with a legal move.',
-            'Explain the move idea before the next turn.',
+            'Continue until the game ends or the players stop.',
             'Reset or save the board when the game is done.',
         ]
         plan['word_bank'] = [
@@ -231,11 +248,10 @@ def build_plan(spec):
             'the match.'
         )
         plan['learner_goal'] = (
-            'Practice turn taking, aim planning, scoring, and strategy '
-            'explanation with a partner.'
+            'Play a complete two-player carrom match with scoring.'
         )
         plan['learner_steps'] = [
-            'Student A chooses an aim point and explains the shot.',
+            'Student A chooses an aim point and takes the shot.',
             'Record pocketed coins, queen claims, or fouls.',
             'Switch turns so Student B plans the next shot.',
             'Compare scores and reset or save the match in the Journal.',
@@ -245,33 +261,26 @@ def build_plan(spec):
             'turn', 'score',
         ]
     elif template == 'canvas':
-        plan['summary'] = (
-            'A drawing canvas for learners to sketch, label, revise, and '
-            'share ideas about %s.' % subject
-        )
-        plan['learner_goal'] = (
-            'Create and explain a visual model or artifact about %s.'
-            % subject
-        )
+        plan['summary'] = 'A drawing canvas for creating %s.' % subject
+        plan['learner_goal'] = 'Create the requested drawing or design.'
         plan['learner_steps'] = [
-            'Sketch the first idea on the canvas.',
-            'Point to one part and explain what it means.',
-            'Revise the drawing after a partner question.',
-            'Save the final visual artifact to the Journal.',
+            'Choose a drawing tool and color.',
+            'Draw directly on the canvas.',
+            'Undo, revise, or clear the work as needed.',
+            'Save the finished work to the Journal.',
         ]
     elif template == 'grid':
         plan['summary'] = (
-            'An interactive grid for sorting, matching, or building patterns '
-            'about %s.' % subject
+            'An interactive grid-based activity for %s.' % subject
         )
         plan['learner_goal'] = (
-            'Use a grid pattern or classification to explain %s.' % subject
+            'Play or complete the requested grid-based activity.'
         )
         plan['learner_steps'] = [
-            'Choose tiles that belong in the first pattern.',
-            'Describe the rule or reason for each choice.',
-            'Ask a partner to change one tile and explain why.',
-            'Save the final grid to the Journal.',
+            'Start or reset the activity.',
+            'Use the controls to move, choose, or place items.',
+            'Continue until the completion or win rule is reached.',
+            'Save progress to the Journal.',
         ]
     elif template == 'narrative':
         plan['starter_text'] = (
@@ -286,148 +295,26 @@ def build_plan(spec):
 
 
 def enrich_plan(spec, plan, references=None):
-    """Add local classroom design detail before rendering the project."""
+    """Normalize provider detail without inventing classroom requirements."""
     enriched = normalize_plan(spec, plan)
     references = references or ()
     template = enriched['template']
     subject = _subject_from_spec(spec)
 
-    defaults = {
-        'canvas': {
-            'features': [
-                'large drawing surface',
-                'drag-to-draw interaction',
-                'clear/reset action',
-                'Journal-saved learner artifact',
-            ],
-            'classroom_flow': [
-                'Sketch a first idea on the canvas.',
-                'Explain what the drawing shows to a partner.',
-                'Revise one part after feedback.',
-                'Save the final artifact to the Journal.',
-            ],
-        },
-        'chess': {
-            'features': [
-                'full 8x8 board',
-                'white and black turn taking',
-                'legal move feedback',
-                'captures and move log',
-                'Journal-saved board state',
-            ],
-            'classroom_flow': [
-                'White chooses a legal first move.',
-                'Black answers and explains the idea.',
-                'Partners record one reason for each move.',
-                'Reset, replay, or save the board when finished.',
-            ],
-        },
-        'carrom': {
-            'features': [
-                'full carrom board with four pockets',
-                'two-student turn taking',
-                'striker aim marker',
-                'coin, queen, and foul scoring',
-                'Journal-saved match state',
-            ],
-            'classroom_flow': [
-                'Student A picks an aim point and names the shot idea.',
-                'Record the pocketed coin, queen, or foul outcome.',
-                'Student B takes the next turn and explains the strategy.',
-                'Review the shot log, then reset or save the match.',
-            ],
-        },
-        'grid': {
-            'features': [
-                'toggleable pattern grid',
-                'visible selected-square count',
-                'quick reset by untoggling choices',
-                'Journal-saved pattern state',
-            ],
-            'classroom_flow': [
-                'Create a pattern on the grid.',
-                'Describe the rule that creates the pattern.',
-                'Ask a partner to extend or change the rule.',
-                'Save the final pattern to the Journal.',
-            ],
-        },
-        'narrative': {
-            'features': [
-                'large writing space',
-                'starter prompt',
-                'revision-friendly text',
-                'Journal-saved writing draft',
-            ],
-            'classroom_flow': [
-                'Read the starter prompt.',
-                'Write a first response.',
-                'Share one sentence with a partner.',
-                'Revise and save the draft to the Journal.',
-            ],
-        },
-        'quiz': {
-            'features': [
-                'short learner-friendly questions',
-                'typed responses',
-                'immediate feedback',
-                'score tracking',
-            ],
-            'classroom_flow': [
-                'Answer the first question in your own words.',
-                'Use feedback to improve the next answer.',
-                'Explain one strategy to a partner.',
-                'Try again and compare the new score.',
-            ],
-        },
-        'utility': {
-            'features': [
-                'focused input area',
-                'immediate calculated result',
-                'simple reusable workflow',
-                'Journal-saved tool state',
-            ],
-            'classroom_flow': [
-                'Enter or paste the material to explore.',
-                'Read the result and check if it makes sense.',
-                'Change one input and compare the result.',
-                'Save the useful result to the Journal.',
-            ],
-        },
-    }
-
-    template_defaults = defaults[template]
     enriched['features'] = _unique_strings(
-        enriched.get('features') or template_defaults['features'],
+        enriched.get('features') or _activity_first_features(spec, enriched),
         8,
     )
+    # Preserve explicitly planned instructional support, but do not synthesize
+    # it for ordinary games, creative activities, or tools.
     enriched['classroom_flow'] = _unique_strings(
-        enriched.get('classroom_flow') or template_defaults['classroom_flow'],
-        6,
-    )
+        enriched.get('classroom_flow') or [], 6)
     enriched['teacher_notes'] = _unique_strings(
-        enriched.get('teacher_notes') or [
-            'Pair learners so one student controls and the other explains.',
-            'Ask for one prediction before each action.',
-            'Use the Journal entry as evidence of learning.',
-        ],
-        6,
-    )
+        enriched.get('teacher_notes') or [], 6)
     enriched['assessment_prompts'] = _unique_strings(
-        enriched.get('assessment_prompts') or [
-            'What did you try first?',
-            'What changed after feedback?',
-            'What would you improve next?',
-        ],
-        6,
-    )
+        enriched.get('assessment_prompts') or [], 6)
     enriched['materials'] = _unique_strings(
-        enriched.get('materials') or [
-            'One XO or shared computer',
-            'Partner discussion',
-            'Journal for saved work',
-        ],
-        6,
-    )
+        enriched.get('materials') or [], 6)
     if references:
         enriched['grounding_references'] = _unique_strings(
             [
@@ -455,9 +342,7 @@ def enrich_plan(spec, plan, references=None):
                 'Journal-saved board position',
             ] + enriched.get('features', []), 8)
             enriched['summary'] = (
-                'A clean, two-player chess board for partners to play, '
-                'discuss moves, and reason together without move history '
-                'clutter.'
+                'A clean, two-player chess board without move-history clutter.'
             )
     elif template == 'carrom':
         enriched['players'] = _unique_strings(
@@ -466,7 +351,7 @@ def enrich_plan(spec, plan, references=None):
         )
     elif template == 'narrative' and not enriched.get('starter_text'):
         enriched['starter_text'] = (
-            '%s\n\nI notice...\nI wonder...\nMy next revision is...\n'
+            '%s\n\nStart writing here.\n'
             % spec.prompt.strip()
         )
     elif template == 'utility':
@@ -474,11 +359,35 @@ def enrich_plan(spec, plan, references=None):
 
     if not enriched.get('summary') or enriched['summary'] == spec.prompt:
         enriched['summary'] = (
-            'A Sugar activity about %s with hands-on work, reflection, '
-            'and Journal saving.' % subject
+            'A Sugar activity for %s with working interactions and Journal '
+            'saving.' % subject
         )
 
     return enriched
+
+
+def _activity_first_features(spec, plan):
+    """Return truthful fallbacks without turning a template into the idea.
+
+    ``template`` is only the closest implementation/reference family.  A
+    swimming game may use a canvas, for example, but that does not make it a
+    drawing activity.  Provider plans normally supply concrete features; if
+    they do not, keep the metadata honest and request-oriented instead of
+    borrowing mechanics from the template renderer.
+    """
+    activity_kind = str(
+        plan.get('activity_kind') or spec.name or 'requested activity'
+    ).strip()
+    interaction = str(plan.get('interaction_model') or '').strip()
+    features = ['Core experience: %s' % activity_kind]
+    if interaction:
+        features.append('Interaction: %s' % interaction)
+    features.extend([
+        'Working request-specific controls with immediate visible feedback',
+        'Clear progress, completion, and error states where applicable',
+        'Journal-saved activity state and progress',
+    ])
+    return features
 
 
 def normalize_plan(spec, plan):
@@ -488,7 +397,10 @@ def normalize_plan(spec, plan):
 
     text_fields = (
         'activity_kind',
+        'color_model',
+        'feedback_model',
         'interaction_model',
+        'responsive_behavior',
         'summary',
         'learner_goal',
         'starter_text',
@@ -520,6 +432,8 @@ def normalize_plan(spec, plan):
 
     for field, limit in (
             ('ui_regions', 8),
+            ('toolbar_actions', 8),
+            ('palette_actions', 8),
             ('features', 8),
             ('classroom_flow', 6),
             ('teacher_notes', 6),
@@ -531,6 +445,12 @@ def normalize_plan(spec, plan):
             clean_values = _unique_strings(values, limit)
             if clean_values:
                 normalized[field] = clean_values
+
+    normalized['ui_regions'] = _sugar_native_ui_regions(
+        normalized.get('ui_regions', []),
+        preserve_reference_layout=(
+            'Reference image brief' in (spec.prompt or '')),
+    )
 
     questions = plan.get('questions')
     if isinstance(questions, list):
@@ -604,7 +524,10 @@ def normalize_plan(spec, plan):
             clean_history.append(clean_event)
         normalized['repair_history'] = clean_history
 
-    for field in ('chess_show_move_log',):
+    for field in (
+            'chess_show_move_log',
+            'reference_image_supplied',
+            'reference_brief_supplied'):
         value = plan.get(field)
         if isinstance(value, bool):
             normalized[field] = value
@@ -616,50 +539,17 @@ def normalize_plan(spec, plan):
     return normalized
 
 
-# Appended to every generated activity.py so the shipped activity always
-# looks like a modern Sugar activity -- titled cards, rounded controls --
-# regardless of how the model styled it.  It touches ONLY this activity's own
-# widgets (via style classes on its canvas tree) and a class-scoped
-# stylesheet, so nothing else on the screen is affected (safe even in the
-# studio's in-process preview).  Uses only the allowlisted `gi` runtime.
-_AOD_AUTOSTYLE_MARKER = 'Sugar Activity Studio: automatic visual polish'
+# Appended to every generated activity.py as a small layout safeguard.  It is
+# deliberately non-visual: normal controls must be rendered by Sugar's GTK
+# theme rather than a generated card/brand skin.  The traversal only prevents
+# wrapped labels from claiming an unbounded natural width and starving the
+# learner's dominant work canvas.
+_AOD_AUTOSTYLE_MARKER = 'Sugar Activity Studio: native layout safeguards'
 
 _AOD_AUTOSTYLE = '''
 
-# --- Sugar Activity Studio: automatic visual polish -------------------------
-def _aod_install_theme():
-    try:
-        import gi
-        gi.require_version('Gtk', '3.0')
-        from gi.repository import Gdk, Gtk
-    except Exception:
-        return
-    screen = Gdk.Screen.get_default()
-    if screen is None or getattr(screen, '_aod_theme_done', False):
-        return
-    css = b""".aod-card {
-        background-color: #ffffff;
-        border: 1px solid alpha(#1d2b3a, 0.10);
-        border-radius: 14px;
-        padding: 12px;
-    }
-    .aod-card > label { font-weight: bold; color: #2f6fb0; }
-    .aod-heading { font-weight: bold; color: #2f6fb0; }
-    .aod-btn { border-radius: 10px; padding: 6px 16px; }
-    .aod-btn:hover { background-image: none; background-color: #e9f2fb; }
-    .aod-field { border-radius: 9px; padding: 5px 10px; }
-    """
-    try:
-        provider = Gtk.CssProvider()
-        provider.load_from_data(css)
-        Gtk.StyleContext.add_provider_for_screen(
-            screen, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
-        screen._aod_theme_done = True
-    except Exception:
-        pass
-
-
-def _aod_beautify(widget, depth=0):
+# --- Sugar Activity Studio: native layout safeguards ------------------------
+def _aod_sugar_layout(widget, depth=0):
     try:
         import gi
         gi.require_version('Gtk', '3.0')
@@ -669,17 +559,7 @@ def _aod_beautify(widget, depth=0):
     if widget is None or depth > 24:
         return
     try:
-        context = widget.get_style_context()
-        if isinstance(widget, Gtk.Frame):
-            context.add_class('aod-card')
-            label_widget = widget.get_label_widget()
-            if label_widget is not None:
-                label_widget.get_style_context().add_class('aod-heading')
-        elif isinstance(widget, Gtk.Button):
-            context.add_class('aod-btn')
-        elif isinstance(widget, Gtk.Entry):
-            context.add_class('aod-field')
-        elif isinstance(widget, Gtk.Label):
+        if isinstance(widget, Gtk.Label):
             # A wrapped label with no width cap reports its full one-line
             # text width as its natural width, ballooning side panels far
             # past their requested size and starving the main work area.
@@ -693,7 +573,7 @@ def _aod_beautify(widget, depth=0):
     try:
         if isinstance(widget, Gtk.Container):
             for child in widget.get_children():
-                _aod_beautify(child, depth + 1)
+                _aod_sugar_layout(child, depth + 1)
     except Exception:
         pass
 
@@ -704,8 +584,7 @@ try:
     def _aod_wrapped_init(self, *args, **kwargs):
         _aod_generated_init(self, *args, **kwargs)
         try:
-            _aod_install_theme()
-            _aod_beautify(self.get_canvas())
+            _aod_sugar_layout(self.get_canvas())
         except Exception:
             pass
 
@@ -728,8 +607,7 @@ def assemble_project(spec, plan, output_root, activity_source=None):
     # replacing it with a template would violate the repair-only contract.
     source = (render_activity_source(spec, plan)
               if activity_source is None else activity_source)
-    # Give every shipped activity a consistent, modern Sugar look without
-    # depending on how the model styled it.  Idempotent: a refined source
+    # Add non-visual Sugar layout safeguards. Idempotent: a refined source
     # already carries the bootstrap, so never append it twice.
     if _AOD_AUTOSTYLE_MARKER in source:
         activity_py = source
@@ -982,9 +860,9 @@ def _render_readme(spec, plan):
     return (
         '# %(name)s\n\n'
         '%(summary)s\n\n'
-        '## Learner goal\n\n'
+        '## Activity goal\n\n'
         '%(goal)s\n\n'
-        '## Suggested learning flow\n\n'
+        '## How to play or use it\n\n'
         '%(steps)s\n\n'
         '%(extra_sections)s'
         '## Generation details\n\n'
@@ -1137,26 +1015,22 @@ def _utility_mode_from_plan(spec, plan):
 
 def _utility_summary(subject, mode):
     if mode == 'timer':
-        return (
-            'A classroom timer for pacing, comparing, and reflecting on %s.'
-            % subject
-        )
+        return 'A timer for %s with start, pause, reset, and saving.' % subject
     if mode == 'counter':
         return (
             'A simple counter for tallying observations and decisions about '
             '%s.' % subject
         )
     return (
-        'A text tool that counts words and characters while learners inspect '
-        '%s.' % subject
+        'A text tool that counts words and characters for %s.' % subject
     )
 
 
 def _utility_goal(subject, mode):
     if mode == 'timer':
-        return 'Use elapsed time as evidence while working on %s.' % subject
+        return 'Track elapsed time while working on %s.' % subject
     if mode == 'counter':
-        return 'Track and explain counts or scores connected to %s.' % subject
+        return 'Track counts or scores connected to %s.' % subject
     return 'Measure and revise text connected to %s.' % subject
 
 
@@ -1165,14 +1039,14 @@ def _utility_steps(mode):
         return [
             'Start the timer before the activity round.',
             'Pause when the round ends.',
-            'Compare elapsed time with the class goal.',
+            'Read or compare the elapsed time.',
             'Reset or save the timing note in the Journal.',
         ]
     if mode == 'counter':
         return [
             'Press plus when an event or idea appears.',
             'Press minus to correct a tally.',
-            'Explain what the count means.',
+            'Read or use the current count.',
             'Reset or save the tally in the Journal.',
         ]
     return [
@@ -1196,6 +1070,47 @@ def _unique_strings(values, limit):
         if len(result) == limit:
             break
     return result
+
+
+def _sugar_native_ui_regions(regions, preserve_reference_layout=False):
+    """Collapse an explicitly two-sided/dashboard plan into Sugar regions.
+
+    Generic provider plans sometimes describe a web dashboard literally as
+    left controls + work area + right controls. Keeping that unchanged steers
+    code generation away from Sugar composition. An analyzed reference image
+    is different: its target-region placement is an explicit learner input and
+    must remain intact, while host/browser regions have already been excluded
+    by the vision brief. A single genuinely necessary panel also remains
+    untouched.
+    """
+    if not isinstance(regions, list):
+        return regions
+    clean = _unique_strings(regions, 8)
+    if preserve_reference_layout:
+        return clean
+    lowered = [value.lower() for value in clean]
+    has_left = any(re.search(r'\bleft\b.*\b(sidebar|panel)\b|'
+                             r'\b(sidebar|panel)\b.*\bleft\b', value)
+                   for value in lowered)
+    has_right = any(re.search(r'\bright\b.*\b(sidebar|panel)\b|'
+                              r'\b(sidebar|panel)\b.*\bright\b', value)
+                    for value in lowered)
+    dashboard_regions = sum(
+        bool(re.search(r'\b(sidebar|dashboard)\b', value))
+        for value in lowered)
+    if not ((has_left and has_right) or dashboard_regions >= 2):
+        return clean
+
+    preserved = '; '.join(clean)
+    if len(preserved) > 900:
+        preserved = preserved[:897].rstrip() + '...'
+    return [
+        'Dominant expanding learner creation or play workspace',
+        ('Sugar ToolbarBox plus contextual palettes/sub-toolbars preserving '
+         'the functions proposed in the original regions: %s' % preserved),
+        ('At most one compact persistent tray or panel, and only for status '
+         'or controls that must remain visible throughout the task'),
+    ]
 
 
 def _quiz_questions(spec):
@@ -1326,14 +1241,20 @@ def _activity_icon(plan):
     """Per-activity icon: the model's own drawing when the plan
     carries one, else the deterministic glyph, else the checkmark."""
     try:
+        from generation.icons import recolor_icon_svg
+        stroke = plan.get('icon_stroke_color', '#282828')
+        fill = plan.get('icon_fill_color', '#FFFFFF')
         icon_svg = plan.get('icon_svg')
         if icon_svg:
             from generation.icons import sanitize_icon_svg
             safe = sanitize_icon_svg(icon_svg)
             if safe:
-                return safe
+                colored = recolor_icon_svg(safe, stroke, fill)
+                if colored:
+                    return colored
         from generation.icons import render_activity_icon
-        return render_activity_icon(plan)
+        fallback = render_activity_icon(plan)
+        return recolor_icon_svg(fallback, stroke, fill) or fallback
     except Exception:
         return _ACTIVITY_ICON
 
