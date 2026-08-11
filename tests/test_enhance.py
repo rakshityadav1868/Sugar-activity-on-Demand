@@ -102,7 +102,10 @@ class TestClean(unittest.TestCase):
         self.assertEqual('', _clean(123))
 
     def test_system_prompt_mentions_plain_text(self):
-        self.assertIn('PLAIN TEXT', build_enhance_system_prompt())
+        prompt = build_enhance_system_prompt()
+        self.assertIn('PLAIN TEXT', prompt)
+        self.assertIn('Do not turn a normal game', prompt)
+        self.assertIn('Never invent math questions', prompt)
 
 
 if __name__ == '__main__':

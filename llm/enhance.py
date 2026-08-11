@@ -34,12 +34,16 @@ def build_enhance_system_prompt():
         'for generating a Sugar (GTK3) learning activity.\n'
         "Keep the learner's intent and vocabulary — clarify it, do not "
         'replace it.\n'
+        'Do not turn a normal game, creative activity, or utility into a '
+        'lesson. Never invent math questions, vocabulary, assessment, '
+        'reflection, classroom roles, or learning mechanics unless the '
+        'learner explicitly requested them.\n'
         'Return PLAIN TEXT only, at most 180 words: one sentence '
         'stating what the activity is, then short lines covering:\n'
         '- gameplay / interaction (what the learner actually does)\n'
         '- the main screen regions and controls\n'
         '- the win or completion rule\n'
-        '- what the learner practices or learns\n'
+        '- what makes the requested activity useful, playable, or satisfying\n'
         '- what gets saved to the Journal\n'
         'No markdown headers, no code, no questions, no preamble like '
         '"Here is". Write it as the activity request itself.'
@@ -50,7 +54,8 @@ def build_enhance_user_prompt(prompt, spec=None):
     context = ''
     if spec is not None:
         context = (
-            '\nSelected learning areas: %s\nAge band: %s'
+            '\nOptional discovery tags (do not inject as features): %s\n'
+            'Age band: %s'
             % (', '.join(spec.learning_categories()), spec.age_band)
         )
     return 'Learner idea: %s%s' % (prompt, context)
