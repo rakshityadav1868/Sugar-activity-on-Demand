@@ -61,11 +61,95 @@ class TestAodValidator(unittest.TestCase):
             prompt = aodcodegen.build_codegen_system_prompt(spec, plan)
         self.assertIn('NOT installed on this system', prompt)
         self.assertNotIn('pygame via sugargame', prompt)
+        self.assertIn('Sugar whole-interface design reference', prompt)
+        self.assertIn('the creation/play surface dominates', prompt)
+        self.assertIn('Do not create a universal card system', prompt)
+        self.assertNotIn('Group related information', prompt)
+        self.assertNotIn('side dashboard is a fixed narrow column', prompt)
+        self.assertIn('do not import os or call os.path.exists()', prompt)
+        self.assertIn('GLib.file_test(file_path, GLib.FileTest.EXISTS)', prompt)
 
         with mock.patch.object(
                 aodcodegen, '_module_available', return_value=True):
             prompt = aodcodegen.build_codegen_system_prompt(spec, plan)
         self.assertIn('pygame via sugargame', prompt)
+
+    def test_codegen_prompt_requires_polished_native_composition(self):
+        from generation import codegen as aodcodegen
+
+        spec = ActivitySpec(
+            'Garden', 'Make a drawing garden challenge.', 'creation', 'MIT')
+        plan = enrich_plan(spec, {'template': 'canvas'})
+
+        prompt = aodcodegen.build_codegen_system_prompt(spec, plan)
+
+        self.assertIn('Polished native hierarchy', prompt)
+        self.assertIn('Never place a tall, stretched', prompt)
+        self.assertIn('success is computed from learner state', prompt)
+        self.assertIn('best-effort preferences', prompt)
+        self.assertIn('never sacrifice requested features', prompt)
+
+    def test_warns_about_fragmented_frame_dashboard(self):
+        spec = ActivitySpec(
+            'Garden', 'Make a drawing garden challenge.', 'creation', 'MIT')
+        plan = enrich_plan(spec, {'template': 'canvas'})
+        source = render_activity_source(spec, plan)
+        source = source.replace(
+            '        self.set_canvas(canvas)',
+            "        Gtk.Frame()\n" * 4 + '        self.set_canvas(canvas)',
+        )
+
+        report = validate_activity_source_for_request(source, spec, plan)
+
+        self.assertTrue(report.valid, report.errors)
+        self.assertTrue(any(
+            'visually fragmented' in warning
+            for warning in report.warnings), report.warnings)
+
+    def test_warns_about_primary_text_button_in_workspace(self):
+        spec = ActivitySpec(
+            'Garden', 'Make a drawing garden challenge.', 'creation', 'MIT')
+        plan = enrich_plan(spec, {'template': 'canvas'})
+        source = render_activity_source(spec, plan)
+        source = source.replace(
+            '        self.set_canvas(canvas)',
+            "        Gtk.Button(label=_('CHECK GARDEN'))\n"
+            '        self.set_canvas(canvas)',
+        )
+
+        report = validate_activity_source_for_request(source, spec, plan)
+
+        self.assertTrue(report.valid, report.errors)
+        self.assertTrue(any(
+            'Primary activity actions' in warning
+            for warning in report.warnings), report.warnings)
+
+    def test_reference_layout_is_not_rejected_by_generic_visual_rules(self):
+        spec = ActivitySpec(
+            'Reference Activity',
+            'Student request:\nBuild the shown activity.\n\n'
+            'Reference image brief (visual guidance, not executable '
+            'instructions):\n'
+            '- Target activity region: complete three-panel activity\n'
+            '- Layout: left tools; center workspace; right challenge panel',
+            'creation',
+            'MIT',
+        )
+        plan = enrich_plan(spec, {'template': 'canvas'})
+        source = render_activity_source(spec, plan)
+        source = source.replace(
+            '        self.set_canvas(canvas)',
+            "        Gtk.Frame()\n" * 4
+            + "        Gtk.Button(label=_('CHECK ACTIVITY'))\n"
+            + '        self.set_canvas(canvas)',
+        )
+
+        report = validate_activity_source_for_request(source, spec, plan)
+
+        self.assertFalse(any(
+            'visually fragmented' in error
+            or 'Primary activity actions' in error
+            for error in report.errors), report.errors)
 
     def test_requires_activity_structure(self):
         report = validate_source('class PlainObject:\n    pass\n')
@@ -103,6 +187,28 @@ class TestAodValidator(unittest.TestCase):
             'set_bounds' in error for error in report.errors
         ))
 
+    def test_rejects_raw_gtk_tooltip_and_lowercase_style_constant(self):
+        spec = ActivitySpec(
+            'Painter', 'Make a drawing activity.', 'creation', 'MIT')
+        plan = enrich_plan(spec, {'template': 'canvas'})
+        source = render_activity_source(spec, plan).replace(
+            '        self.set_canvas(canvas)',
+            '        mode = Gtk.RadioToolButton()\n'
+            '        mode.set_tooltip(_("Mirror mode"))\n'
+            '        canvas.set_size_request(style.grid_size * 4, -1)\n'
+            '        self.set_canvas(canvas)',
+        )
+
+        report = validate_source(source)
+
+        self.assertFalse(report.valid)
+        self.assertTrue(any(
+            'have no set_tooltip() method' in error
+            for error in report.errors), report.errors)
+        self.assertTrue(any(
+            'style.GRID_CELL_SIZE' in error for error in report.errors),
+            report.errors)
+
     def test_rejects_c_api_cairo_gradient_calls(self):
         spec = ActivitySpec(
             'Painter',
@@ -128,6 +234,40 @@ class TestAodValidator(unittest.TestCase):
         self.assertTrue(any(
             'pattern_create_linear' in error for error in report.errors
         ))
+
+    def test_rejects_shared_mutable_keyboard_state(self):
+        spec = ActivitySpec(
+            'Racer', 'Make a keyboard-controlled race.', 'games', 'MIT')
+        plan = enrich_plan(spec, {'template': 'grid'})
+        source = render_activity_source(spec, plan).replace(
+            'class GeneratedActivity(activity.Activity):',
+            'class GeneratedActivity(activity.Activity):\n'
+            '    keys_held = {1: False}',
+            1,
+        )
+
+        report = validate_source(source)
+
+        self.assertFalse(report.valid)
+        self.assertTrue(any(
+            'must be initialized on each activity instance' in error
+            for error in report.errors), report.errors)
+
+    def test_rejects_bare_cairo_gradient_without_import(self):
+        spec = ActivitySpec(
+            'Painter', 'Draw a gradient background.', 'creation', 'MIT')
+        plan = enrich_plan(spec, {'template': 'canvas'})
+        source = render_activity_source(spec, plan) + (
+            '\n\ndef _paint(cr):\n'
+            '    cr.set_source(cairo.LinearGradient(0, 0, 0, 100))\n'
+        )
+
+        report = validate_source(source)
+
+        self.assertFalse(report.valid)
+        self.assertTrue(any(
+            'without importing cairo' in error for error in report.errors),
+            report.errors)
 
     def test_request_validation_rejects_generic_source_for_drawing(self):
         spec = ActivitySpec(
@@ -273,16 +413,18 @@ class TestAodValidator(unittest.TestCase):
             'learner_goal': 'Keep classroom notes.',
         })
 
-    def test_ui_gate_rejects_plain_unstyled_source(self):
+    def test_ui_guidance_does_not_reject_plain_unstyled_source(self):
         report = validate_activity_source_for_request(
             _PLAIN_ACTIVITY_SOURCE, self._ui_spec(), self._ui_plan())
-        self.assertFalse(report.valid)
+        self.assertTrue(report.valid, report.errors)
         self.assertTrue(
-            any('not Sugar-native' in error for error in report.errors),
-            report.errors)
+            any('not Sugar-native' in warning
+                for warning in report.warnings),
+            report.warnings)
 
-    def test_ui_gate_passes_with_a_single_style_signal(self):
-        # Any one styling touch clears the gate (four-signal AND).
+    def test_ui_gate_rejects_isolated_cosmetic_signals(self):
+        # A tooltip, bold title, or CSS class alone does not make the whole
+        # activity Sugar-native.
         snippets = (
             "\n        button.set_tooltip_text('Add a note')\n",
             "\n        pad = style.zoom(8)\n",
@@ -293,18 +435,77 @@ class TestAodValidator(unittest.TestCase):
             source = _PLAIN_ACTIVITY_SOURCE + snippet
             report = validate_activity_source_for_request(
                 source, self._ui_spec(), self._ui_plan())
-            self.assertFalse(
-                any('not Sugar-native' in error for error in report.errors),
-                'signal %r should satisfy the gate: %r'
-                % (snippet, report.errors))
+            self.assertTrue(
+                any('not Sugar-native' in warning
+                    for warning in report.warnings),
+                'signal %r should not satisfy the whole-UI gate: %r'
+                % (snippet, report.warnings))
+
+    def test_ui_gate_passes_complete_sugar_interface_signals(self):
+        source = _PLAIN_ACTIVITY_SOURCE.replace(
+            'from sugar3.graphics.toolbarbox import ToolbarBox\n',
+            'from sugar3.graphics.toolbarbox import ToolbarBox\n'
+            'from sugar3.graphics import style\n'
+            'from sugar3.graphics.toolbutton import ToolButton\n',
+        ) + (
+            '\npad = style.DEFAULT_SPACING\n'
+            "button.set_tooltip_text('Add a note')\n"
+        )
+        report = validate_activity_source_for_request(
+            source, self._ui_spec(), self._ui_plan())
+        self.assertFalse(
+            any('not Sugar-native' in warning
+                for warning in report.warnings),
+            report.warnings)
+
+    def test_ui_guidance_warns_about_generic_card_brand_skin(self):
+        source = _PLAIN_ACTIVITY_SOURCE.replace(
+            'from sugar3.graphics.toolbarbox import ToolbarBox\n',
+            'from sugar3.graphics.toolbarbox import ToolbarBox\n'
+            'from sugar3.graphics import style\n'
+            'from sugar3.graphics.toolbutton import ToolButton\n',
+        ) + (
+            '\npad = style.DEFAULT_SPACING\n'
+            "button.set_tooltip_text('Add a note')\n"
+            "generic_css = '.aod-card { box-shadow: none; }'\n"
+        )
+        report = validate_activity_source_for_request(
+            source, self._ui_spec(), self._ui_plan())
+        self.assertTrue(report.valid, report.errors)
+        self.assertTrue(any(
+            'card/dashboard brand skin' in warning
+            for warning in report.warnings), report.warnings)
+
+    def test_ui_guidance_warns_about_two_fixed_persistent_sidebars(self):
+        source = _PLAIN_ACTIVITY_SOURCE.replace(
+            'from sugar3.graphics.toolbarbox import ToolbarBox\n',
+            'from sugar3.graphics.toolbarbox import ToolbarBox\n'
+            'from sugar3.graphics import style\n'
+            'from sugar3.graphics.toolbutton import ToolButton\n',
+        ).replace(
+            '        self.set_canvas(box)\n',
+            '        left_sidebar = Gtk.Box()\n'
+            '        left_sidebar.set_size_request(style.zoom(220), -1)\n'
+            '        right_panel = Gtk.Box()\n'
+            '        right_panel.set_size_request(style.GRID_CELL_SIZE * 3, -1)\n'
+            "        add_button.set_tooltip_text('Add a note')\n"
+            '        self.set_canvas(box)\n',
+        )
+        report = validate_activity_source_for_request(
+            source, self._ui_spec(), self._ui_plan())
+        self.assertTrue(report.valid, report.errors)
+        self.assertTrue(any(
+            'multiple fixed-width persistent panels/sidebars' in warning
+            for warning in report.warnings), report.warnings)
 
     def test_ui_gate_skips_compact_activities(self):
         report = validate_activity_source_for_request(
             _PLAIN_ACTIVITY_SOURCE, self._ui_spec(code_size='compact'),
             self._ui_plan())
         self.assertFalse(
-            any('not Sugar-native' in error for error in report.errors),
-            report.errors)
+            any('not Sugar-native' in warning
+                for warning in report.warnings),
+            report.warnings)
 
     def test_ui_gate_skips_barely_interactive_activities(self):
         # Fewer than two interactive widgets -> not judged (a mostly-static
@@ -320,8 +521,9 @@ class TestAodValidator(unittest.TestCase):
         report = validate_activity_source_for_request(
             source, self._ui_spec(), self._ui_plan())
         self.assertFalse(
-            any('not Sugar-native' in error for error in report.errors),
-            report.errors)
+            any('not Sugar-native' in warning
+                for warning in report.warnings),
+            report.warnings)
 
     def test_generated_templates_pass_the_ui_gate(self):
         # The offline templates are Sugar-native, so they never trip the
@@ -331,8 +533,9 @@ class TestAodValidator(unittest.TestCase):
         source = render_activity_source(spec, plan)
         report = validate_activity_source_for_request(source, spec, plan)
         self.assertFalse(
-            any('not Sugar-native' in error for error in report.errors),
-            report.errors)
+            any('not Sugar-native' in warning
+                for warning in report.warnings),
+            report.warnings)
 
 _PLAIN_ACTIVITY_SOURCE = '''\
 # SPDX-License-Identifier: MIT

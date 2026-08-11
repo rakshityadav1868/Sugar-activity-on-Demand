@@ -16,6 +16,7 @@ from sugar3.bundle.helpers import bundle_from_archive
 from sugar3.bundle.helpers import bundle_from_dir
 
 from core.spec import LICENSE_IDS
+from generation.known_repairs import find_known_api_issues
 
 
 ALLOWED_IMPORT_ROOTS = {
@@ -153,6 +154,23 @@ def validate_source(source):
         return report
 
     activity_class = activity_classes[0]
+    for node in activity_class.body:
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else (
+            node.target,)
+        for target in targets:
+            if not isinstance(target, ast.Name):
+                continue
+            state_name = target.id.lower()
+            if state_name in (
+                    'keys_held', 'keys_pressed', 'key_state',
+                    'pressed_keys'):
+                report.errors.append(
+                    'Keyboard state `%s` must be initialized on each activity '
+                    'instance (for example `self.%s = {}` in __init__ or a '
+                    'reset method), not shared as mutable class state.' % (
+                        target.id, target.id))
     methods = {
         node.name: node for node in activity_class.body
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
@@ -207,6 +225,10 @@ def validate_source(source):
     for call_name, message in invalid_api_calls.items():
         if any(name.endswith(call_name) for name in all_calls):
             report.errors.append(message)
+
+    # Fail exact GTK/Sugar API mismatches before the preview subprocess
+    # crashes. Saved drafts can correct the same issues locally.
+    report.errors.extend(find_known_api_issues(source))
 
     return report
 
@@ -360,15 +382,13 @@ def validate_activity_source_for_request(source, spec, plan=None):
 
 
 def _check_ui_quality(report, source, source_lower, spec):
-    """Reject only *clearly* unstyled activity UIs.
+    """Report best-effort Sugar interface guidance without blocking output.
 
-    High precision on purpose: the error fires only when the UI is plain on
-    every axis at once -- no Sugar style, no CSS/style-context work, no
-    tooltips, and no Pango markup -- and only for a substantial, interactive
-    activity.  Any single styling touch clears the gate, so drawing-heavy or
-    intentionally minimal activities are never trapped.  When it does fire,
-    the error rides the normal repair loop, which makes the model add the
-    missing Sugar-native styling.
+    The gate intentionally avoids judging request-specific cairo artwork.
+    It checks the surrounding activity chrome and interaction structure:
+    Sugar sizing/theme APIs, helpful control palettes/tooltips, Sugar toolkit
+    controls, and the absence of the generic web-card skin that previously
+    overrode every generated UI.
     """
     if getattr(spec, 'code_size', 'standard') == 'compact':
         return
@@ -385,32 +405,133 @@ def _check_ui_quality(report, source, source_lower, spec):
         or '.zoom(' in source_lower
         or 'icon_size' in source_lower
         or 'style.color_' in source_lower)
-    uses_css = (
-        'cssprovider' in source_lower
-        or 'get_style_context' in source_lower
-        or 'add_provider_for_screen' in source_lower)
     uses_tooltips = (
         'tooltip_text' in source_lower
-        or 'set_tooltip_markup' in source_lower)
-    uses_pango_markup = (
-        'set_markup' in source_lower
-        or 'pango' in source_lower
-        or '<b>' in source_lower
-        or '<span' in source_lower)
+        or 'set_tooltip_markup' in source_lower
+        or 'set_tooltip(' in source_lower)
+    uses_sugar_sizing = any(signal in source_lower for signal in (
+        'style.zoom(', 'style.grid_cell_size', 'style.default_spacing',
+        'style.default_padding', 'style.standard_icon_size',
+        'style.small_icon_size', 'style.large_icon_size'))
+    uses_sugar_controls = any(signal in source_lower for signal in (
+        'sugar3.graphics.toolbutton',
+        'sugar3.graphics.toggletoolbutton',
+        'sugar3.graphics.radiotoolbutton',
+        'sugar3.graphics.colorbutton',
+        'sugar3.graphics.palette',
+        'sugar3.graphics.alert',
+        'sugar3.graphics.icon'))
 
-    if uses_sugar_style or uses_css or uses_tooltips or uses_pango_markup:
-        return
+    missing = []
+    if not uses_sugar_style:
+        missing.append('sugar3.graphics.style')
+    if not uses_sugar_sizing:
+        missing.append('Sugar grid/spacing/icon-size constants')
+    if not uses_tooltips:
+        missing.append('tooltips or Sugar palettes for interactive controls')
+    if not uses_sugar_controls:
+        missing.append('Sugar toolkit controls beyond the activity shell')
 
-    report.errors.append(
-        'The activity UI is not Sugar-native: it uses none of '
-        'sugar3.graphics.style, Gtk.CssProvider/get_style_context styling, '
-        'widget tooltips, or Pango markup. Make it look like a real Sugar '
-        'activity: import sugar3.graphics.style and use style.zoom(N) for '
-        'spacing/margins and style.COLOR_* for colors; add tooltip_text to '
-        'every button and entry; use Pango markup (<b>...</b>) for section '
-        'titles via Gtk.Label.set_markup; and apply a Gtk.CssProvider with '
-        'get_style_context().add_class(...) for panels. Keep all existing '
-        'behavior and the GeneratedActivity class.')
+    if missing:
+        report.warnings.append(
+            'The activity UI is not Sugar-native across the whole interface; '
+            'it is missing %s. Keep the learner workspace dominant, use '
+            'Sugar style sizing/theme constants throughout the layout, use '
+            'sugar3 graphics controls for activity chrome, and give '
+            'interactive controls palettes or tooltips. Do not replace the '
+            'UI with a generic card/dashboard skin.' % ', '.join(missing))
+
+    # Reference pixels may intentionally settle a framed, multi-panel, or
+    # text-action composition. Those target-region decisions outrank generic
+    # visual cleanup. Structural Sugar API/style checks above still apply;
+    # the vision prompt and provider-visible pixels own fidelity.
+    reference_settled = (
+        'reference image brief' in _spec_request_text(spec).lower())
+
+    generic_web_skin = any(signal in source_lower for signal in (
+        '.aod-card',
+        'box-shadow:',
+        '#2f6fb0',
+        'automatic visual polish',
+    ))
+    if generic_web_skin and not reference_settled:
+        report.warnings.append(
+            'The activity UI is not Sugar-native: it contains a generic '
+            'card/dashboard brand skin. Remove card shadows and brand-blue '
+            'chrome, let the Sugar GTK theme style normal widgets, and use '
+            'style.COLOR_* only for request-specific custom visuals.')
+
+    fixed_side_regions = set(re.findall(
+        r'(?m)^\s*(?:self\.)?'
+        r'([a-z_][a-z0-9_]*(?:panel|sidebar)[a-z0-9_]*)'
+        r'\.set_size_request\(\s*[^,\n]+,\s*-1\s*\)',
+        source_lower,
+    ))
+    if len(fixed_side_regions) >= 2 and not reference_settled:
+        report.warnings.append(
+            'The activity UI is not Sugar-native: it creates multiple '
+            'fixed-width persistent panels/sidebars (%s), which crowds the '
+            'learner workspace. Keep the work surface dominant; move primary '
+            'actions into ToolbarBox, contextual controls into Sugar '
+            'palettes/sub-toolbars, and retain at most one compact panel or '
+            'tray when its contents must stay visible.' %
+            ', '.join(sorted(fixed_side_regions)))
+
+    if 'gtk.toolbutton(' in source_lower:
+        report.warnings.append(
+            'The activity UI is not Sugar-native: use '
+            'sugar3.graphics.toolbutton.ToolButton for toolbar actions '
+            'instead of raw Gtk.ToolButton.')
+
+    frame_count = len(re.findall(r'\bGtk\.Frame\s*\(', source))
+    if frame_count >= 4 and not reference_settled:
+        report.warnings.append(
+            'The activity UI is visually fragmented: it creates %d separate '
+            'Gtk.Frame regions. Do not box every instruction, requirement, '
+            'setting, and status value. Keep one dominant learner workspace, '
+            'group secondary information with Sugar spacing/separators, and '
+            'use at most one compact contextual tray or status region.'
+            % frame_count)
+
+    primary_canvas_actions = []
+    for label in _raw_gtk_button_labels(source):
+        normalized = re.sub(r'[^a-z]+', ' ', label.lower()).strip()
+        if any(normalized == action or normalized.startswith(action + ' ')
+               for action in (
+                   'check', 'clear', 'hint', 'new', 'next', 'pause', 'play',
+                   'redo', 'reset', 'restart', 'undo')):
+            primary_canvas_actions.append(label)
+    if primary_canvas_actions and not reference_settled:
+        report.warnings.append(
+            'Primary activity actions must not be raw text Gtk.Buttons in '
+            'the learner workspace (%s). Put these repeated actions in '
+            'ToolbarBox as Sugar ToolButtons with real Sugar Artwork icons '
+            'and tooltips; keep task-content answer/choice buttons in the '
+            'workspace.' % ', '.join(sorted(set(primary_canvas_actions))))
+
+
+def _raw_gtk_button_labels(source):
+    """Return literal labels assigned directly to Gtk.Button constructors."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return []
+    labels = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or _base_name(node.func) != \
+                'Gtk.Button':
+            continue
+        for keyword in node.keywords:
+            if keyword.arg != 'label':
+                continue
+            value = keyword.value
+            if isinstance(value, ast.Call) and value.args \
+                    and _call_name(value.func) == '_':
+                value = value.args[0]
+            if isinstance(value, ast.Constant) \
+                    and isinstance(value.value, str):
+                labels.append(value.value)
+    return labels
 
 
 def validate_project(project_path):
