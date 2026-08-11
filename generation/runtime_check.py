@@ -28,6 +28,7 @@ _REPO_ROOT = os.path.dirname(
 # Snap/IDE library-path contamination, this keeps API keys, tokens, proxy
 # credentials, and unrelated host configuration out of the subprocess.
 _RUNTIME_ENV_ALLOWLIST = {
+    'AOD_RUNTIME_SPIN_SECONDS',
     'DBUS_SESSION_BUS_ADDRESS',
     'DISPLAY',
     'GDK_BACKEND',

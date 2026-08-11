@@ -192,6 +192,99 @@ class TestRuntimeCheck(unittest.TestCase):
         self.assertIn('boom-at-runtime', detail)
 
     @unittest.skipUnless(_HAVE_DISPLAY, 'needs a display')
+    def test_crash_in_draw_callback_fails_instead_of_shipping_blank_canvas(self):
+        source = _template_source()
+        crashing = source.replace(
+            '        self.set_canvas(canvas)',
+            "        canvas.connect('draw', lambda *args: 1 / 0)\n"
+            '        self.set_canvas(canvas)',
+            1,
+        )
+        self.assertNotEqual(source, crashing)
+        with mock.patch.dict(os.environ, {'AOD_RUNTIME_CHECK': 'on'}):
+            ok, detail = run_runtime_check(crashing, 'Runtime Probe')
+        self._skip_if_runtime_unavailable(ok, detail)
+        self.assertFalse(ok)
+        self.assertIn('ZeroDivisionError', detail)
+
+    @unittest.skipUnless(_HAVE_DISPLAY, 'needs a display')
+    def test_delayed_callback_crash_fails_instead_of_shipping_partial_game(self):
+        source = _template_source().replace(
+            '        self.set_canvas(canvas)',
+            '        GLib.timeout_add(100, lambda: 1 / 0)\n'
+            '        self.set_canvas(canvas)',
+            1,
+        )
+        self.assertNotEqual(source, _template_source())
+        runtime_env = {
+            'AOD_RUNTIME_CHECK': 'on',
+            'AOD_RUNTIME_SPIN_SECONDS': '0.35',
+        }
+        with mock.patch.dict(os.environ, runtime_env):
+            ok, detail = run_runtime_check(source, 'Runtime Probe')
+        self._skip_if_runtime_unavailable(ok, detail)
+        self.assertFalse(ok)
+        self.assertIn('ZeroDivisionError', detail)
+
+    @unittest.skipUnless(_HAVE_DISPLAY, 'needs a display')
+    def test_finish_line_branch_is_exercised_without_waiting_full_level(self):
+        source = _template_source().replace(
+            '        self.set_canvas(canvas)',
+            '        self.distance_traveled = 0.0\n'
+            "        self.level_configs = [{'length': 2000.0}]\n"
+            '        self.current_level = 0\n'
+            "        self.game_state = 'PLAYING'\n"
+            '        canvas.connect(\n'
+            "            'draw', lambda *args: 1 / 0 if "
+            'self.distance_traveled > 1500 else False)\n'
+            '        self.set_canvas(canvas)',
+            1,
+        )
+        self.assertNotEqual(source, _template_source())
+        with mock.patch.dict(os.environ, {'AOD_RUNTIME_CHECK': 'on'}):
+            ok, detail = run_runtime_check(source, 'Runtime Probe')
+        self._skip_if_runtime_unavailable(ok, detail)
+        self.assertFalse(ok)
+        self.assertIn('ZeroDivisionError', detail)
+
+    @unittest.skipUnless(_HAVE_DISPLAY, 'needs a display')
+    def test_boss_state_branch_is_exercised_without_playing_full_level(self):
+        source = _template_source().replace(
+            '        self.set_canvas(canvas)',
+            '        self.distance_traveled = 0.0\n'
+            "        self.level_configs = [{'length': 2000.0}]\n"
+            '        self.current_level = 0\n'
+            "        self.game_state = 'PLAYING'\n"
+            '        canvas.connect(\n'
+            "            'draw', lambda *args: 1 / 0 if "
+            "self.game_state == 'DRAGON_FIGHT' else False)\n"
+            '        self.set_canvas(canvas)',
+            1,
+        )
+        with mock.patch.dict(os.environ, {'AOD_RUNTIME_CHECK': 'on'}):
+            ok, detail = run_runtime_check(source, 'Runtime Probe')
+        self._skip_if_runtime_unavailable(ok, detail)
+        self.assertFalse(ok)
+        self.assertIn('ZeroDivisionError', detail)
+
+    @unittest.skipUnless(_HAVE_DISPLAY, 'needs a display')
+    def test_victory_autosave_none_branch_is_exercised(self):
+        source = _template_source().replace(
+            '    def write_file(self, file_path):',
+            '    def _victory_autosave(self):\n'
+            '        self.write_file(None)\n\n'
+            '    def write_file(self, file_path):\n'
+            '        if file_path is None:\n'
+            '            raise RuntimeError("broken-victory-autosave")',
+            1,
+        )
+        with mock.patch.dict(os.environ, {'AOD_RUNTIME_CHECK': 'on'}):
+            ok, detail = run_runtime_check(source, 'Runtime Probe')
+        self._skip_if_runtime_unavailable(ok, detail)
+        self.assertFalse(ok)
+        self.assertIn('broken-victory-autosave', detail)
+
+    @unittest.skipUnless(_HAVE_DISPLAY, 'needs a display')
     def test_blocking_init_times_out(self):
         source = _template_source()
         blocking = source.replace(
