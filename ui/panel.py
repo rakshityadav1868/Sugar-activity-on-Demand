@@ -38,6 +38,7 @@ import re
 import shutil
 import glob
 import subprocess
+import tempfile
 import threading
 import time
 from gettext import gettext as _
@@ -57,14 +58,43 @@ from sugar3.graphics import style
 from sugar3.graphics.icon import CanvasIcon
 from sugar3.graphics.icon import Icon
 from sugar3.graphics.icon import _IconBuffer
+from sugar3.graphics.toolbutton import ToolButton
 
 from ui.ring import HomeRingLayout
 
 # Resolved relative to this module so it works from a repo checkout and
 # from inside an installed .xo bundle.
-_ACTIVITY_ICON = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    'activity', 'activity.svg')
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_ACTIVITY_ICON = os.path.join(_PROJECT_ROOT, 'activity', 'activity.svg')
+_LEARNING_AREA_ICON_ROOT = os.path.join(
+    _PROJECT_ROOT, 'data', 'icons', 'learning-areas')
+_PROMPT_CONTROL_ICON_ROOT = os.path.join(
+    _PROJECT_ROOT, 'data', 'icons', 'prompt-controls')
+_SUGAR_ICON_ROOT = '/usr/share/icons/sugar/scalable'
+
+_LEARNING_AREA_ICON_FILES = {
+    'logic_math': 'logic-math-color.svg',
+    'science': 'science-color.svg',
+    'language': 'language-color.svg',
+    'tools_utils': 'tools-color.svg',
+    'games': 'games-color.svg',
+    'creation': 'creation-color.svg',
+}
+
+_PROMPT_CONTROL_ICON_FILES = {
+    'example': 'prompt-add.svg',
+    'reference': 'prompt-image.svg',
+    'send': 'prompt-send.svg',
+}
+
+# OpenRouter routes that reliably accept image input.  When the learner's
+# configured OpenRouter model is text-only (its route exposes no image
+# endpoint), reference-image analysis retries with these vision routes on
+# the same API key before giving up.
+_OPENROUTER_VISION_FALLBACK_MODELS = (
+    'google/gemini-3.5-flash',
+    'google/gemini-2.5-flash',
+)
 
 
 def _brand_icon_kwargs(file_property='file'):
@@ -76,6 +106,34 @@ def _brand_icon_kwargs(file_property='file'):
     if os.path.exists(_ACTIVITY_ICON):
         return {file_property: _ACTIVITY_ICON}
     return {'icon_name': 'computer-xo'}
+
+
+def _sugar_action_icon_kwargs(icon_name):
+    """Prefer Sugar's recolourable SVG instead of a host-theme substitute."""
+    for category in ('actions', 'categories', 'emblems', 'status', 'device',
+                     'devices', 'places'):
+        path = os.path.join(_SUGAR_ICON_ROOT, category, icon_name + '.svg')
+        if os.path.isfile(path):
+            return {'file': path}
+    return {'icon_name': icon_name}
+
+
+def _learning_area_icon_kwargs(learning_area, fallback_icon_name):
+    """Return the bundled Sugar artwork for a prompt-screen category."""
+    filename = _LEARNING_AREA_ICON_FILES.get(learning_area, '')
+    path = os.path.join(_LEARNING_AREA_ICON_ROOT, filename)
+    if filename and os.path.isfile(path):
+        return {'file': path}
+    return _sugar_action_icon_kwargs(fallback_icon_name)
+
+
+def _prompt_control_icon_kwargs(control, fallback_icon_name):
+    """Return a bundled Sugar-style icon for a prompt action."""
+    filename = _PROMPT_CONTROL_ICON_FILES.get(control, '')
+    path = os.path.join(_PROMPT_CONTROL_ICON_ROOT, filename)
+    if filename and os.path.isfile(path):
+        return {'file': path}
+    return _sugar_action_icon_kwargs(fallback_icon_name)
 
 
 class CreateAIActivityPanel(Gtk.EventBox):
@@ -119,6 +177,7 @@ class CreateAIActivityPanel(Gtk.EventBox):
         self._ensure_css()
         self.modify_bg(Gtk.StateType.NORMAL, style.COLOR_WHITE.get_gdk_color())
         self.get_style_context().add_class('create-ai-panel')
+        self.connect('key-press-event', self.__activity_tools_key_press_cb)
         self._option_buttons = {}
         self._selected_options = {
             'template': 'logic_math',
@@ -156,6 +215,7 @@ class CreateAIActivityPanel(Gtk.EventBox):
         self._flatpak_export_running = False
         self._license_hint = None
         self._prompt_text = None
+        self._prompt_box = None
         self._prompt_char_label = None
         self._prompt_status_label = None
         self._prompt_reference_button = None
@@ -208,6 +268,7 @@ class CreateAIActivityPanel(Gtk.EventBox):
         self._review_summary_label = None
         self._review_meta_label = None
         self._review_code_label = None
+        self._review_source_scroll = None
         self._current_review_file = 'activity_py'
         self._review_generation_context = {}
         self._version_history_buttons = []
@@ -274,20 +335,30 @@ class CreateAIActivityPanel(Gtk.EventBox):
         self._aod_session_id = ''
         self._aod_active_revision_id = ''
         self._aod_original_prompt = ''
-        self._sidebar_messages_box = None
-        self._sidebar_chat_scroll = None
-        self._sidebar_refine_entry = None
-        self._sidebar_refine_status_label = None
-        self._sidebar_challenge_box = None
-        self._sidebar_reflection_box = None
-        self._sidebar_annotation_box = None
-        self._sidebar_content_boxes = {}
-        self._sidebar_tab_buttons = {}
-        self._sidebar_level_label = None
+        self._activity_tools_stack = None
+        self._activity_tools_title_label = None
+        self._activity_tools_close_button = None
+        self._activity_tools_home_first_button = None
+        self._activity_tools_back_buttons = {}
+        self._activity_tools_change_entry = None
+        self._activity_tools_change_status = None
+        self._activity_tools_change_confirm = None
+        self._activity_tools_change_summary = None
+        self._activity_tools_change_scroll = None
+        self._activity_tools_apply_button = None
+        self._activity_tools_reviewed_change = None
+        self._activity_tools_confirmation_serial = 0
+        self._activity_tools_whole_target = None
+        self._activity_tools_selected_target = None
+        self._activity_tools_selected_target_label = None
+        self._activity_tools_understand_overview = None
+        self._activity_tools_understand_sections = None
         self._prompt_is_placeholder = False
         self._enhance_button = None
+        self._enhance_chip = None
         self._enhance_chip_value_label = None
         self._enhance_running = False
+        self._prompt_already_enhanced = False
         self._enhanced_prompt_announced = False
         self._guided_state = None
         self._guided_view = None
@@ -300,12 +371,14 @@ class CreateAIActivityPanel(Gtk.EventBox):
         self._step_sub_label = None
         self._step_index = -1
         self._preview_is_fullscreen = False
+        self._preview_toolbar_title = None
         self._preview_fullscreen_button = None
         self._studio_left_panel = None
         self._left_revealer = None
         self._studio_right_panel = None
         self._body_paned = None
         self._inner_paned = None
+        self._activity_tools_overlay = None
         self._inner_paned_initialised = False
         self._sidebar_saved_pos = None
         self._left_saved_pos = None
@@ -334,6 +407,12 @@ class CreateAIActivityPanel(Gtk.EventBox):
         self._content_alignment.show()
 
         self._stack = Gtk.Stack()
+        # Each workspace should size to the visible page.  Keeping Gtk.Stack's
+        # horizontal homogeneity here made the 1280px home composition impose
+        # a 1300px minimum on the studio, which is wider than Sugar's native
+        # 1200px activity canvas.
+        self._stack.set_hhomogeneous(False)
+        self._stack.set_vhomogeneous(False)
         self._stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
         self._stack.set_transition_duration(180)
         self._content_alignment.add(self._stack)
@@ -359,6 +438,7 @@ class CreateAIActivityPanel(Gtk.EventBox):
 
     def reset_view(self):
         self.cancel_generation()
+        self._set_activity_tools_open(False)
         self._clear_reference_image()
         self._generation_result = None
         self._review_generation_context = {}
@@ -391,7 +471,7 @@ class CreateAIActivityPanel(Gtk.EventBox):
 
     def _create_home_view(self):
         content = Gtk.VBox(spacing=style.zoom(14))
-        content.set_size_request(style.zoom(1280), -1)
+        content.set_hexpand(True)
 
         # A proper top toolbar: app identity on the left, primary
         # actions on the right, with a soft divider under it.
@@ -655,13 +735,14 @@ class CreateAIActivityPanel(Gtk.EventBox):
             self._home_empty_box.show()
 
     def _go_home(self):
+        self._set_activity_tools_open(False)
         self._use_studio_layout()
         self._refresh_home_projects()
         self._stack.set_visible_child_name('home')
 
     def _create_create_view(self):
         container = Gtk.VBox(spacing=style.zoom(10))
-        container.set_size_request(style.zoom(1280), -1)
+        container.set_hexpand(True)
 
         try:
             create_icon = Icon(pixel_size=style.zoom(54),
@@ -689,9 +770,16 @@ class CreateAIActivityPanel(Gtk.EventBox):
         subtitle.show()
 
         prompt_box = Gtk.EventBox()
+        self._prompt_box = prompt_box
         prompt_box.get_style_context().add_class('create-ai-prompt-box')
         prompt_box.set_above_child(False)
-        prompt_box.set_size_request(style.zoom(1040), -1)
+        prompt_box.set_hexpand(True)
+        # Keep the composer at the wider reference-ready width from the
+        # outset.  Otherwise its natural width follows the changing status
+        # text and visibly jumps when an image attachment becomes ready.
+        prompt_box.set_size_request(style.zoom(860), -1)
+        prompt_box.set_margin_start(style.zoom(20))
+        prompt_box.set_margin_end(style.zoom(20))
         prompt_box.set_halign(Gtk.Align.CENTER)
         container.pack_start(prompt_box, False, False, style.zoom(10))
         prompt_box.show()
@@ -754,10 +842,9 @@ class CreateAIActivityPanel(Gtk.EventBox):
         bottom_row.show()
 
         hint_icon = Gtk.Button()
-        add_icon = Icon(icon_name='list-add',
-                        pixel_size=style.SMALL_ICON_SIZE,
-                        stroke_color=style.COLOR_WHITE.get_svg(),
-                        fill_color=style.COLOR_BLACK.get_svg())
+        add_icon = Icon(
+            pixel_size=style.SMALL_ICON_SIZE,
+            **_prompt_control_icon_kwargs('example', 'list-add'))
         add_icon.show()
         hint_icon.set_image(add_icon)
         hint_icon.get_style_context().add_class('create-ai-plus')
@@ -769,14 +856,10 @@ class CreateAIActivityPanel(Gtk.EventBox):
         bottom_row.pack_start(hint_icon, False, False, 0)
         hint_icon.show()
 
-        prompt_reference = Gtk.Button()
+        prompt_reference = ToolButton(
+            tooltip=_('Add a PNG or JPEG as visual and layout guidance'))
         self._prompt_reference_button = prompt_reference
-        prompt_reference.set_relief(Gtk.ReliefStyle.NONE)
-        prompt_reference.get_style_context().add_class(
-            'create-ai-prompt-reference')
         prompt_reference.set_valign(Gtk.Align.CENTER)
-        prompt_reference.set_tooltip_text(
-            _('Add a PNG or JPEG as visual and layout guidance'))
         prompt_reference.get_accessible().set_name(
             _('Add reference image'))
         prompt_reference.connect(
@@ -800,7 +883,8 @@ class CreateAIActivityPanel(Gtk.EventBox):
         prompt_reference_clear.hide()
         self._update_reference_image_ui()
 
-        enhance_chip = Gtk.ToggleButton()
+        enhance_chip = Gtk.Button()
+        self._enhance_chip = enhance_chip
         enhance_chip.set_relief(Gtk.ReliefStyle.NONE)
         enhance_chip.get_style_context().add_class('create-ai-prompt-chip')
         enhance_chip.get_style_context().add_class(
@@ -809,20 +893,18 @@ class CreateAIActivityPanel(Gtk.EventBox):
             _('Enhance'), _('Auto'))
         enhance_chip.add(enhance_content)
         self._enhance_chip_value_label = enhance_value
-        enhance_chip.set_active(True)
         enhance_chip.set_tooltip_text(
-            _('Automatically expand short prompts into a detailed '
-              'brief before generating'))
-        enhance_chip.connect('toggled', self.__enhance_chip_toggled_cb)
+            _('Short prompts are enhanced automatically; click to preview '
+              'the enhanced brief now'))
+        enhance_chip.connect('clicked', self.__enhance_button_clicked_cb)
         bottom_row.pack_start(enhance_chip, False, False, 0)
         enhance_chip.show()
 
         send_btn = Gtk.Button()
         self._prompt_send_button = send_btn
-        send_icon = Icon(icon_name='go-up',
-                         pixel_size=style.SMALL_ICON_SIZE,
-                         stroke_color=style.COLOR_WHITE.get_svg(),
-                         fill_color=style.COLOR_WHITE.get_svg())
+        send_icon = Icon(
+            pixel_size=style.SMALL_ICON_SIZE,
+            **_prompt_control_icon_kwargs('send', 'go-up'))
         send_icon.show()
         send_btn.set_image(send_icon)
         send_btn.get_style_context().add_class('create-ai-send')
@@ -841,15 +923,24 @@ class CreateAIActivityPanel(Gtk.EventBox):
         enhance_btn.set_tooltip_text(
             _('Expand your idea into a detailed brief you can edit'))
         enhance_btn.connect('clicked', self.__enhance_button_clicked_cb)
+        # Prompt enhancement remains available through the Enhance / Auto
+        # chip and still runs as part of generation.  Keep this widget alive
+        # for the enhancement lifecycle, but do not show the duplicate manual
+        # action in the compact composer toolbar.
+        enhance_btn.set_no_show_all(True)
         bottom_row.pack_end(enhance_btn, False, False, style.zoom(6))
-        enhance_btn.show()
+        enhance_btn.hide()
 
         thinking = Gtk.Label(_('Ready'))
         self._prompt_status_label = thinking
         thinking.get_style_context().add_class('create-ai-prompt-status')
         thinking.set_valign(Gtk.Align.CENTER)
+        # Status updates continue to drive the workflow internally.  They are
+        # intentionally hidden here because the selected learning-area cards
+        # and the generation view already communicate the useful state.
+        thinking.set_no_show_all(True)
         bottom_row.pack_end(thinking, False, False, 0)
-        thinking.show()
+        thinking.hide()
 
         code_size_combo = Gtk.ComboBoxText()
         self._code_size_combo = code_size_combo
@@ -923,8 +1014,11 @@ class CreateAIActivityPanel(Gtk.EventBox):
         template_hint.get_style_context().add_class('create-ai-meta-note')
         template_hint.set_halign(Gtk.Align.CENTER)
         template_hint.set_justify(Gtk.Justification.CENTER)
+        # Keep the selected learning-area description available to the
+        # controller without repeating it below the already-selected cards.
+        template_hint.set_no_show_all(True)
         container.pack_start(template_hint, False, False, style.zoom(2))
-        template_hint.show()
+        template_hint.hide()
 
         planner_hint = Gtk.Label()
         planner_hint.get_style_context().add_class('create-ai-meta-note')
@@ -933,8 +1027,11 @@ class CreateAIActivityPanel(Gtk.EventBox):
         planner_hint.set_justify(Gtk.Justification.CENTER)
         planner_hint.set_line_wrap(True)
         planner_hint.set_max_width_chars(132)
+        # Provider choice and validation remain active; this explanatory
+        # footer is redundant with the model control and generation flow.
+        planner_hint.set_no_show_all(True)
         container.pack_start(planner_hint, False, False, 0)
-        planner_hint.show()
+        planner_hint.hide()
         self._update_planner_hint()
 
         return container
@@ -958,12 +1055,12 @@ class CreateAIActivityPanel(Gtk.EventBox):
     # A distinct (stroke, fill) colour per learning area so each card's
     # icon carries its own vibrant hue instead of flat grey.
     _LEARNING_AREA_COLORS = {
-        'logic_math': ('#e0603a', '#f6cbc8'),    # coral
-        'science': ('#3f9b8e', '#bfe2db'),       # teal
-        'language': ('#4a90d9', '#cee0f6'),      # sky
-        'tools_utils': ('#9b6ac0', '#e4d5f0'),   # violet
-        'games': ('#5aa65a', '#cfe8cf'),         # green
-        'creation': ('#e0a13a', '#f6e6c6'),      # amber
+        'logic_math': ('#c94e32', '#fff3f0'),    # coral
+        'science': ('#25786f', '#f3fffc'),       # teal
+        'language': ('#256fb5', '#f4f9ff'),      # sky
+        'tools_utils': ('#75489b', '#fcf8ff'),   # violet
+        'games': ('#397e3d', '#f4fff4'),         # green
+        'creation': ('#b87312', '#fff9ec'),      # amber
     }
 
     def _build_chip_content(self, caption, value, caret=False):
@@ -1009,19 +1106,20 @@ class CreateAIActivityPanel(Gtk.EventBox):
         button.add(content)
         content.show()
 
-        # These are standard theme icons that don't honour Sugar's
-        # stroke/fill recolouring, so the colour comes from a soft
-        # circular badge behind the icon instead — one hue per area.
+        # Bundle the official Sugar artwork instead of asking the desktop
+        # theme for similarly named icons.  That keeps these cards visually
+        # Sugar-native on GNOME, inside Sugar, and in portable builds.
         badge = Gtk.EventBox()
         badge.get_style_context().add_class('create-ai-area-badge')
         badge.get_style_context().add_class('create-ai-area-%s' % value)
         badge.set_halign(Gtk.Align.CENTER)
         badge.set_valign(Gtk.Align.CENTER)
         badge.set_size_request(style.zoom(64), style.zoom(64))
-        icon = Icon(icon_name=icon_name,
-                    pixel_size=style.STANDARD_ICON_SIZE,
-                    stroke_color=style.COLOR_TOOLBAR_GREY.get_svg(),
-                    fill_color=style.COLOR_INACTIVE_FILL.get_svg())
+        stroke_color, fill_color = self._LEARNING_AREA_COLORS[value]
+        icon = Icon(pixel_size=style.STANDARD_ICON_SIZE,
+                    stroke_color=stroke_color,
+                    fill_color=fill_color,
+                    **_learning_area_icon_kwargs(value, icon_name))
         icon.set_halign(Gtk.Align.CENTER)
         icon.set_valign(Gtk.Align.CENTER)
         badge.add(icon)
@@ -1049,14 +1147,10 @@ class CreateAIActivityPanel(Gtk.EventBox):
         return button
 
     def _update_template_card_icons(self):
-        selected = self._selected_learning_areas()
         for value, icon in self._template_card_icons.items():
-            if value in selected:
-                icon.props.stroke_color = style.COLOR_WHITE.get_svg()
-                icon.props.fill_color = style.COLOR_BUTTON_GREY.get_svg()
-            else:
-                icon.props.stroke_color = style.COLOR_TOOLBAR_GREY.get_svg()
-                icon.props.fill_color = style.COLOR_INACTIVE_FILL.get_svg()
+            stroke_color, fill_color = self._LEARNING_AREA_COLORS[value]
+            icon.props.stroke_color = stroke_color
+            icon.props.fill_color = fill_color
 
     def _selected_learning_areas(self):
         valid = [value for value, unused_title, unused_detail, unused_icon
@@ -1109,29 +1203,31 @@ class CreateAIActivityPanel(Gtk.EventBox):
         prompt = '' if self._prompt_is_placeholder else \
             self._get_prompt_text()
         if not prompt:
+            self._set_enhance_chip_state(
+                _('Type first'),
+                _('Type your activity idea, then press Enhance'))
             if self._prompt_status_label is not None:
                 self._prompt_status_label.set_text(
                     _('Type your idea first, then press Enhance'))
             return
 
-        from llm.providers import get_configured_provider
-        from llm.providers import normalize_provider_name
-
-        provider_name = normalize_provider_name(
-            self._selected_options.get('provider', 'default'))
-        try:
-            provider = get_configured_provider(provider_name)
-        except Exception:
-            logging.exception('Could not resolve provider for enhance')
-            provider = None
+        # Use the service resolver, just like generation and guided planning.
+        # It loads credentials saved in AODCredentialStore; the former direct
+        # provider factory only saw environment variables and therefore made
+        # Enhance fail even when the selected model was configured in the UI.
+        provider = self._resolve_active_provider()
         if provider is None:
+            self._set_enhance_chip_state(
+                _('Needs AI'),
+                _('Configure an AI provider before enhancing the prompt'))
             if self._prompt_status_label is not None:
                 self._prompt_status_label.set_text(
-                    _('Enhance needs an AI provider (not the local '
-                      'template)'))
+                    _('Enhance needs a configured AI provider'))
             return
 
         self._enhance_running = True
+        self._set_enhance_chip_state(
+            _('Working...'), _('Enhancing your activity idea'), False)
         if self._enhance_button is not None:
             self._enhance_button.set_sensitive(False)
         if self._prompt_status_label is not None:
@@ -1140,25 +1236,44 @@ class CreateAIActivityPanel(Gtk.EventBox):
 
         def worker():
             from llm.enhance import enhance_prompt
-            text, enhanced = enhance_prompt(provider, prompt)
+            spec = self._guided_spec_for_prompt(prompt)
+            text, enhanced = enhance_prompt(provider, prompt, spec)
             GObject.idle_add(self.__enhance_finished_cb, text, enhanced)
 
         threading.Thread(target=worker, daemon=True).start()
 
     def __enhance_finished_cb(self, text, enhanced):
         self._enhance_running = False
+        if self._enhance_chip is not None:
+            self._enhance_chip.set_sensitive(True)
         if self._enhance_button is not None:
             self._enhance_button.set_sensitive(True)
         if enhanced:
             self._set_prompt_text(text)
+            self._prompt_already_enhanced = True
+            self._set_enhance_chip_state(
+                _('Done'),
+                _('Prompt enhanced. You can edit it or generate the activity.'))
             if self._prompt_status_label is not None:
                 self._prompt_status_label.set_text(
                     _('Enhanced — edit it if you like, then Send'))
-        elif self._prompt_status_label is not None:
-            self._prompt_status_label.set_text(
-                _('Could not enhance right now; your prompt is '
-                  'unchanged'))
+        else:
+            self._set_enhance_chip_state(
+                _('Try again'),
+                _('The model could not enhance the prompt; it is unchanged.'))
+            if self._prompt_status_label is not None:
+                self._prompt_status_label.set_text(
+                    _('Could not enhance right now; your prompt is '
+                      'unchanged'))
         return False
+
+    def _set_enhance_chip_state(self, value, tooltip=None, sensitive=True):
+        if self._enhance_chip_value_label is not None:
+            self._enhance_chip_value_label.set_text(value)
+        if self._enhance_chip is not None:
+            self._enhance_chip.set_sensitive(sensitive)
+            if tooltip:
+                self._enhance_chip.set_tooltip_text(tooltip)
 
     # ----- Guided generation: questions -> plan -> discuss -> build -----
 
@@ -1278,6 +1393,10 @@ class CreateAIActivityPanel(Gtk.EventBox):
                 widget.set_sensitive(sensitive)
         for pill in self._studio_action_pills:
             pill.set_sensitive(sensitive)
+        if self._sidebar_toggle_button is not None:
+            self._sidebar_toggle_button.set_sensitive(
+                sensitive and self._generation_result is not None and
+                not self._has_active_generation_job())
 
     def _clear_guided_body(self):
         if self._guided_body is None:
@@ -1372,23 +1491,65 @@ class CreateAIActivityPanel(Gtk.EventBox):
             'answer_widgets': {},
             'plan_text': '',
             'discussion': [],
+            'auto_enhanced': False,
         }
         self._guided_running = True
-        self._show_guided_message(_('Thinking about a few good questions…'))
+        from llm.enhance import needs_enhancement
+        auto_enhance = (
+            self._selected_options.get('enhance', 'on') == 'on' and
+            not self._prompt_already_enhanced and
+            needs_enhancement(prompt)
+        )
+        self._guided_state['auto_enhanced'] = \
+            self._prompt_already_enhanced
+        self._show_guided_message(
+            _('Enhancing your idea…') if auto_enhance else
+            _('Thinking about a few good questions…'))
         self._enter_guided_studio()
 
         def worker():
+            from dataclasses import replace
             from llm.clarify import generate_questions
-            questions = generate_questions(provider, spec)
-            GObject.idle_add(self._guided_questions_ready, questions)
+            guided_prompt = prompt
+            guided_spec = spec
+            was_enhanced = False
+            if auto_enhance:
+                from llm.enhance import enhance_prompt
+                guided_prompt, was_enhanced = enhance_prompt(
+                    provider, prompt, spec)
+                if was_enhanced:
+                    guided_spec = replace(spec, prompt=guided_prompt)
+                    GObject.idle_add(
+                        self._show_guided_message,
+                        _('Enhanced — checking whether anything important '
+                          'is still unclear…'))
+            questions = generate_questions(provider, guided_spec)
+            GObject.idle_add(
+                self._guided_questions_ready,
+                questions,
+                guided_prompt if was_enhanced else '',
+                guided_spec if was_enhanced else None,
+            )
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _guided_questions_ready(self, questions):
+    def _guided_questions_ready(self, questions, enhanced_prompt='',
+                                enhanced_spec=None):
         self._guided_running = False
         state = self._guided_state
         if not state:
             return False
+        if enhanced_prompt and enhanced_spec is not None:
+            # Keep the learner-facing chat message untouched, but use the
+            # enhanced brief for every downstream AI call and for generation.
+            state['prompt'] = enhanced_prompt
+            state['spec'] = enhanced_spec
+            state['auto_enhanced'] = True
+            self._set_prompt_text(enhanced_prompt)
+            self._prompt_already_enhanced = True
+            self._set_enhance_chip_state(
+                _('Done'),
+                _('Prompt was enhanced automatically and sent to the AI.'))
         state['questions'] = questions
         try:
             if questions:
@@ -1425,16 +1586,6 @@ class CreateAIActivityPanel(Gtk.EventBox):
         title.set_halign(Gtk.Align.START)
         title.set_xalign(0)
         heading.pack_start(title, False, False, 0)
-
-        subtitle = Gtk.Label(
-            _('A few choices help tailor “%s” to what you want to make.')
-            % state.get('display_prompt', state['prompt']))
-        subtitle.set_halign(Gtk.Align.START)
-        subtitle.set_line_wrap(True)
-        subtitle.set_max_width_chars(90)
-        subtitle.set_xalign(0)
-        subtitle.get_style_context().add_class('create-ai-guided-subtitle')
-        heading.pack_start(subtitle, False, False, 0)
 
         count = Gtk.Label(
             _('%d questions · about 1 minute') % len(questions))
@@ -1915,6 +2066,7 @@ class CreateAIActivityPanel(Gtk.EventBox):
             enriched,
             chat_prompt=original,
             display_prompt=original,
+            already_enhanced=bool(state.get('auto_enhanced')),
         )
 
     def _create_section_label(self, text):
@@ -2219,9 +2371,8 @@ class CreateAIActivityPanel(Gtk.EventBox):
         workspace.add(studio)
         studio.show()
 
-        # Nested draggable panes: [ left chat | [ preview | sidebar ] ].
-        # The handles let the learner resize the chat and the learning
-        # sidebar live, and drive the collapse animations too.
+        # One draggable split keeps chat beside the preview. Activity Tools
+        # is a temporary overlay on the preview, not a third resizable pane.
         body = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
         body.get_style_context().add_class('create-ai-studio-body')
         self._body_paned = body
@@ -2234,24 +2385,35 @@ class CreateAIActivityPanel(Gtk.EventBox):
         self._studio_left_panel = self._create_studio_left_panel()
         body.pack1(self._studio_left_panel, False, False)
 
+        tools_overlay = Gtk.Overlay()
+        self._activity_tools_overlay = tools_overlay
+        body.pack2(tools_overlay, True, False)
+        tools_overlay.show()
+
+        # Keep a full-width preview as the base layer. Activity Tools is an
+        # overlay drawer, so opening it never squeezes the generated activity
+        # into an unusable strip on a narrow display.
         inner = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
         self._inner_paned = inner
-        body.pack2(inner, True, False)
+        tools_overlay.add(inner)
         inner.show()
 
         inner.pack1(self._create_studio_preview_panel(), True, True)
         self._studio_right_panel = self._create_learning_sidebar()
-        inner.pack2(self._studio_right_panel, False, False)
-        # The learning sidebar starts collapsed. Allow the second pane to
-        # shrink past its content minimum so the preview receives the full
-        # width until the learner explicitly opens it.
-        self._set_pane_shrink(inner, self._studio_right_panel, True)
-        # Geometry alone is not enough here: Gtk.Paned can briefly allocate
-        # its second child while a hidden stack page becomes visible. Keep
-        # the closed sidebar widget genuinely invisible until its toggle is
-        # used.
-        self._studio_right_panel.set_no_show_all(True)
-        self._studio_right_panel.hide()
+        revealer = Gtk.Revealer()
+        self._sidebar_revealer = revealer
+        revealer.set_transition_type(Gtk.RevealerTransitionType.SLIDE_LEFT)
+        revealer.set_transition_duration(240)
+        revealer.set_halign(Gtk.Align.END)
+        revealer.set_valign(Gtk.Align.FILL)
+        revealer.set_vexpand(True)
+        # Keep the preview toolbar visible while the drawer covers only the
+        # activity workspace, as shown in the approved mockups.
+        revealer.set_margin_top(style.zoom(50))
+        revealer.add(self._studio_right_panel)
+        tools_overlay.add_overlay(revealer)
+        revealer.set_no_show_all(True)
+        revealer.hide()
 
         body.set_position(style.zoom(455))
         # The right divider needs the pane's real width, known only
@@ -3021,8 +3183,14 @@ class CreateAIActivityPanel(Gtk.EventBox):
         top.show()
 
         title = Gtk.Label(_('Classroom preview'))
+        self._preview_toolbar_title = title
         title.get_style_context().add_class('create-ai-studio-section-title')
         title.set_xalign(0)
+        # The preview shares the studio width with the chat at Sugar's
+        # 1024px canvas size.  Let the descriptive title yield space to the
+        # actionable controls instead of overlapping the Activity Tools icon.
+        title.set_ellipsize(Pango.EllipsizeMode.END)
+        title.set_tooltip_text(_('Classroom preview'))
         top.pack_start(title, True, True, 0)
         title.show()
 
@@ -3059,7 +3227,11 @@ class CreateAIActivityPanel(Gtk.EventBox):
             False, False, 0)
 
         self._sidebar_toggle_button = self._create_plain_button(
-            _('▶ Sidebar'), self.__sidebar_toggle_cb)
+            _('🔧 Change'), self.__sidebar_toggle_cb)
+        self._sidebar_toggle_button.get_style_context().add_class(
+            'create-ai-activity-tools-trigger')
+        self._sidebar_toggle_button.get_accessible().set_name(
+            _('Open Activity Tools'))
         top.pack_end(self._sidebar_toggle_button, False, False, 0)
 
         tabs = Gtk.HBox(spacing=style.zoom(8))
@@ -3191,7 +3363,8 @@ class CreateAIActivityPanel(Gtk.EventBox):
         self._select_point = None
         if self._live_preview_activity is not None:
             try:
-                self._live_preview_activity.cleanup()
+                from preview.runner import dispose_activity_preview
+                dispose_activity_preview(self._live_preview_activity)
             except Exception:
                 pass
             self._live_preview_activity = None
@@ -3449,6 +3622,7 @@ class CreateAIActivityPanel(Gtk.EventBox):
         source_frame.show()
 
         source_scroll = Gtk.ScrolledWindow()
+        self._review_source_scroll = source_scroll
         source_scroll.set_policy(Gtk.PolicyType.AUTOMATIC,
                                  Gtk.PolicyType.AUTOMATIC)
         source_frame.add(source_scroll)
@@ -4667,10 +4841,10 @@ class CreateAIActivityPanel(Gtk.EventBox):
         play_button.show()
 
         plus = Gtk.Button()
-        plus_icon = Icon(icon_name='list-add',
-                         pixel_size=style.SMALL_ICON_SIZE,
-                         stroke_color='#e2e2e2',
-                         fill_color='#e2e2e2')
+        plus_icon = Icon(pixel_size=style.SMALL_ICON_SIZE,
+                         stroke_color='#c3a6f4',
+                         fill_color='#493860',
+                         **_sugar_action_icon_kwargs('list-add'))
         plus_icon.show()
         plus.set_image(plus_icon)
         plus.set_relief(Gtk.ReliefStyle.NONE)
@@ -4746,10 +4920,10 @@ class CreateAIActivityPanel(Gtk.EventBox):
 
         send = Gtk.Button()
         self._ask_bar_send_button = send
-        send_icon = Icon(icon_name='go-up',
-                         pixel_size=style.SMALL_ICON_SIZE,
-                         stroke_color=style.COLOR_WHITE.get_svg(),
-                         fill_color=style.COLOR_WHITE.get_svg())
+        send_icon = Icon(pixel_size=style.SMALL_ICON_SIZE,
+                         stroke_color='#ffffff',
+                         fill_color='#f26440',
+                         **_prompt_control_icon_kwargs('send', 'go-up'))
         send_icon.show()
         send.set_image(send_icon)
         send.set_relief(Gtk.ReliefStyle.NONE)
@@ -4959,25 +5133,30 @@ class CreateAIActivityPanel(Gtk.EventBox):
             if button is None:
                 continue
             if thumbnail is None:
-                icon_color = '#555555' \
-                    if button is self._prompt_reference_button \
-                    else '#d8d8d8'
                 icon = Icon(
-                    icon_name='insert-image',
                     pixel_size=style.SMALL_ICON_SIZE,
-                    stroke_color=icon_color,
-                    fill_color=icon_color,
-                )
+                    **_prompt_control_icon_kwargs(
+                        'reference', 'insert-image'))
                 icon.show()
-                button.set_image(icon)
-                button.set_tooltip_text(
-                    _('Add a PNG or JPEG as visual and layout guidance'))
+                if isinstance(button, ToolButton):
+                    button.set_icon_widget(icon)
+                else:
+                    button.set_image(icon)
+                tooltip = _(
+                    'Add a PNG or JPEG as visual and layout guidance')
             else:
                 image = Gtk.Image.new_from_pixbuf(thumbnail)
                 image.show()
-                button.set_image(image)
-                button.set_tooltip_text(
-                    _('Reference: %s') % self._reference_image.source_name)
+                if isinstance(button, ToolButton):
+                    button.set_icon_widget(image)
+                else:
+                    button.set_image(image)
+                tooltip = _(
+                    'Reference: %s') % self._reference_image.source_name
+            if isinstance(button, ToolButton):
+                button.set_tooltip(tooltip)
+            else:
+                button.set_tooltip_text(tooltip)
             button.set_sensitive(not busy)
         for clear_button in clear_buttons:
             if clear_button is None:
@@ -5011,7 +5190,7 @@ class CreateAIActivityPanel(Gtk.EventBox):
             if not text and self._generation_result is None:
                 self._ask_bar_entry.grab_focus()
                 self._set_live_edit_status(
-                    _('Add what learners should learn before sending this '
+                    _('Add what the activity should do before sending this '
                       'reference.'))
                 return
             source = 'preview' if self._live_edit_enabled else 'chat'
@@ -5049,33 +5228,52 @@ class CreateAIActivityPanel(Gtk.EventBox):
                 'gemini', 'openai', 'openrouter'):
             if not self._configure_selected_provider(persist=True):
                 return
-        provider_name, provider = self._resolve_reference_image_provider(
-            service, provider_name)
-        if provider is None:
-            message = _(
-                'Reference images need Gemini, OpenAI, or a '
-                'vision-capable OpenRouter model.')
-            self._set_reference_status(message)
-            if source != 'create':
-                self._append_chat_status(message)
+        candidates = self._reference_image_candidates(service, provider_name)
+        if not candidates:
+            self._continue_with_unanalyzed_reference(
+                text, source,
+                _('No separate vision analyzer is configured.'))
             return
 
         reference = self._reference_image
         serial = self._reference_analysis_serial
         self._reference_analysis_running = True
         self._update_reference_image_ui()
+        provider_labels = ', '.join(
+            provider.label for unused_name, provider in candidates)
         self._set_reference_status(
-            _('Reading the reference with %s...') % provider.label)
+            _('Reading the reference with %s...') % provider_labels)
 
         def worker():
-            try:
-                brief = provider.analyze_reference_image(
-                    text, reference.data, reference.mime_type)
-                error_text = ''
-            except Exception as error:
+            from llm.providers import ProviderImageUnsupportedError
+            brief = ''
+            capability_error = ''
+            last_error = ''
+            for index, (unused_name, candidate) in enumerate(candidates):
+                try:
+                    brief = candidate.analyze_reference_image(
+                        text, reference.data, reference.mime_type)
+                    last_error = ''
+                    break
+                except ProviderImageUnsupportedError as error:
+                    # A text-only model (e.g. a non-vision OpenRouter route)
+                    # cannot read the image. Remember the cause and try the
+                    # next vision-capable provider instead of failing here.
+                    capability_error = capability_error or str(error)
+                except Exception as error:
+                    last_error = str(error)
+                    if index < len(candidates) - 1:
+                        logging.warning(
+                            'Reference image analysis failed with %s; trying '
+                            'the next vision provider: %s',
+                            getattr(candidate, 'label', candidate),
+                            ' '.join(str(error).split()))
+            if capability_error and not brief:
+                last_error = capability_error
+            error_text = last_error or ''
+            if error_text:
                 from llm.reference import sanitize_reference_error
-                brief = ''
-                error_text = sanitize_reference_error(error)
+                error_text = sanitize_reference_error(error_text)
                 logging.warning(
                     'Reference image analysis failed: %s', error_text)
             GObject.idle_add(
@@ -5083,6 +5281,65 @@ class CreateAIActivityPanel(Gtk.EventBox):
                 serial, reference.sha256, text, source, brief, error_text)
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _reference_image_candidates(self, service, provider_name):
+        """Return the ordered chain of vision-capable (name, provider) pairs.
+
+        Starts with the generation provider the user selected; when the
+        selected OpenRouter route is text-only (or otherwise fails to read
+        the image), the analysis falls back through the other configured
+        vision providers so an attached reference still works.  For
+        OpenRouter the configured route is followed by known vision-capable
+        routes on the same API key.
+        """
+        order = [provider_name]
+        local_policy = self._selected_options.get('policy') in (
+            'local', 'strict') or \
+            self._selected_options.get('planner') == 'validate'
+        if not local_policy:
+            for candidate in ('openrouter', 'gemini', 'openai'):
+                if candidate not in order:
+                    order.append(candidate)
+        from llm.providers import OpenAICompatibleProvider
+        candidates = []
+        seen_models = set()
+        for candidate in order:
+            try:
+                provider = service.resolve_provider(candidate)
+            except Exception:
+                continue
+            if provider is None:
+                continue
+            supports_images = getattr(
+                provider, 'supports_image_input', lambda: False)
+            if not supports_images():
+                continue
+            entries = [(candidate, provider)]
+            if candidate == 'openrouter' and \
+                    isinstance(provider, OpenAICompatibleProvider):
+                for vision_model in _OPENROUTER_VISION_FALLBACK_MODELS:
+                    if vision_model == provider.model:
+                        continue
+                    try:
+                        clone = provider.__class__(
+                            api_key=getattr(provider, '_api_key', ''),
+                            model=vision_model,
+                            endpoint=getattr(provider, '_endpoint', None),
+                            provider_name=getattr(
+                                provider, '_provider_name', 'openrouter'),
+                        )
+                    except Exception:
+                        clone = None
+                    if clone is not None and \
+                            getattr(clone, 'supports_image_input', lambda: False)():
+                        entries.append(('openrouter', clone))
+            for name, entry in entries:
+                model = getattr(entry, 'model', '')
+                if (name, model) in seen_models:
+                    continue
+                seen_models.add((name, model))
+                candidates.append((name, entry))
+        return candidates
 
     def _resolve_reference_image_provider(self, service, provider_name):
         """Resolve a vision provider, with capability fallback for Auto."""
@@ -5121,11 +5378,8 @@ class CreateAIActivityPanel(Gtk.EventBox):
         self._reference_analysis_running = False
         self._update_reference_image_ui()
         if error_text:
-            self._set_reference_status(
-                _('Could not read the reference; it is still attached.'))
-            self._append_chat_status(
-                _('Reference image analysis failed: %s') %
-                self._short_provider_status(error_text))
+            self._continue_with_unanalyzed_reference(
+                text, source, error_text)
             return False
 
         from llm.reference import combine_request_with_reference
@@ -5153,442 +5407,740 @@ class CreateAIActivityPanel(Gtk.EventBox):
         )
         return False
 
+    def _continue_with_unanalyzed_reference(self, text, source,
+                                            error_text=''):
+        """Never let optional image analysis block activity generation.
+
+        The in-memory image remains attached and is delivered directly to the
+        code generator. If the selected route rejects image input, the
+        provider adapter retries with the prompt alone. This makes a reference
+        useful when possible without making it a prerequisite for building.
+        """
+        reference = self._reference_image
+        if reference is None:
+            return
+
+        request = (text or '').strip()
+        if not request:
+            request = _(
+                'Update the activity to follow the attached reference image.')
+        detail = self._short_provider_status(error_text) if error_text else ''
+        status = _(
+            'Continuing with your prompt; the reference remains attached.')
+        self._set_reference_status(status)
+        if source != 'create':
+            self._append_chat_status(
+                _('%(status)s %(detail)s') % {
+                    'status': status,
+                    'detail': detail,
+                })
+
+        self._reference_pending_sha = reference.sha256
+        if source == 'create':
+            self._begin_guided_generation(
+                request,
+                display_prompt=text or request,
+            )
+            return
+
+        if self._ask_bar_entry is not None:
+            self._ask_bar_entry.set_text('')
+        self._submit_refinement_from_prompt(
+            request,
+            source=source,
+            display_refinement=(
+                _('%s (with reference image)') % text
+                if text else _('Use the attached reference image')),
+        )
+
     def _create_learning_sidebar(self):
+        """Build the optional two-direction Activity Tools drawer.
+
+        The earlier Challenges/Reflections/Annotations learning dashboard was
+        ignored in child testing.  The approved replacement stays closed
+        during normal play and offers only two intentional maker journeys:
+        change the activity, or understand how it works.
+        """
         panel = Gtk.EventBox()
         panel.get_style_context().add_class('create-ai-learning-sidebar')
-        # Small minimum so the pane can be dragged narrow and the
-        # wrapping content below reflows to fit rather than clipping.
-        panel.set_size_request(style.zoom(200), -1)
+        panel.set_size_request(style.zoom(self._SIDEBAR_DEFAULT_WIDTH), -1)
 
-        box = Gtk.VBox(spacing=style.zoom(9))
-        box.set_border_width(style.zoom(11))
+        box = Gtk.VBox(spacing=style.zoom(10))
+        box.set_border_width(style.zoom(14))
         panel.add(box)
         box.show()
 
-        title = Gtk.Label(_('Learning sidebar'))
-        title.get_style_context().add_class('create-ai-studio-section-title')
+        header = Gtk.HBox(spacing=style.zoom(8))
+        box.pack_start(header, False, False, 0)
+        header.show()
+
+        title = Gtk.Label(_('🔧 Activity Tools'))
+        self._activity_tools_title_label = title
+        title.get_style_context().add_class('create-ai-activity-tools-title')
         title.set_xalign(0)
-        box.pack_start(title, False, False, 0)
+        header.pack_start(title, True, True, 0)
         title.show()
 
-        subtitle = Gtk.Label(
-            _('Challenges, reflections, and annotations stay visible while '
-              'the left chat handles generation and refinements.'))
-        subtitle.get_style_context().add_class('create-ai-meta-note')
-        subtitle.set_xalign(0)
-        subtitle.set_line_wrap(True)
-        box.pack_start(subtitle, False, False, 0)
-        subtitle.show()
+        close_button = Gtk.Button.new_with_label('×')
+        self._activity_tools_close_button = close_button
+        close_button.set_relief(Gtk.ReliefStyle.NONE)
+        close_button.get_style_context().add_class(
+            'create-ai-activity-tools-close')
+        close_button.set_size_request(style.zoom(40), style.zoom(40))
+        close_button.set_tooltip_text(_('Close Activity Tools'))
+        close_button.get_accessible().set_name(_('Close Activity Tools'))
+        close_button.connect('clicked', self.__activity_tools_close_cb)
+        header.pack_end(close_button, False, False, 0)
+        close_button.show()
 
-
-
-
-        tabs = Gtk.HBox(spacing=style.zoom(8))
-        box.pack_start(tabs, False, False, 0)
-        tabs.show()
-        self._sidebar_tab_buttons = {}
-        for key, label in (('challenges', _('Challenges')),
-                           ('reflections', _('Reflections')),
-                           ('annotations', _('Annotations'))):
-            tab = self._create_sidebar_tab(label, False)
-            tab.connect('clicked', self.__sidebar_tab_clicked_cb, key)
-            self._sidebar_tab_buttons[key] = tab
-            tabs.pack_start(tab, True, True, 0)
-
-        self._sidebar_level_label = Gtk.Label(
-            _('Level 1 unlocked - 8 starter challenges'))
-        self._sidebar_level_label.get_style_context().add_class(
-            'create-ai-meta-label')
-        self._sidebar_level_label.set_xalign(0)
-        self._sidebar_level_label.set_line_wrap(True)
-        box.pack_start(self._sidebar_level_label, False, False, 0)
-        self._sidebar_level_label.show()
-
-        scroll = Gtk.ScrolledWindow()
-        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        box.pack_start(scroll, True, True, 0)
-        scroll.show()
-
-        # One viewport holds all three tab bodies; only the active one is
-        # visible (see _show_sidebar_tab). Challenges start populated with
-        # starter prompts; Reflections and Annotations fill in once an
-        # activity is generated (_update_sidebar_learning).
-        stack = Gtk.VBox(spacing=style.zoom(8))
-        scroll.add_with_viewport(stack)
+        stack = Gtk.Stack()
+        self._activity_tools_stack = stack
+        stack.set_transition_type(Gtk.StackTransitionType.SLIDE_LEFT_RIGHT)
+        stack.set_transition_duration(180)
+        box.pack_start(stack, True, True, 0)
         stack.show()
 
-        self._sidebar_challenge_box = Gtk.VBox(spacing=style.zoom(8))
-        self._sidebar_reflection_box = Gtk.VBox(spacing=style.zoom(8))
-        self._sidebar_annotation_box = Gtk.VBox(spacing=style.zoom(8))
-        self._sidebar_content_boxes = {
-            'challenges': self._sidebar_challenge_box,
-            'reflections': self._sidebar_reflection_box,
-            'annotations': self._sidebar_annotation_box,
-        }
-        for content in self._sidebar_content_boxes.values():
-            content.set_border_width(style.zoom(2))
-            stack.pack_start(content, False, False, 0)
+        stack.add_named(self._create_activity_tools_home(), 'home')
+        stack.add_named(self._create_activity_tools_change_page(), 'change')
+        stack.add_named(
+            self._create_activity_tools_understand_page(), 'understand')
 
-        challenges = [
-            _('Rename the activity title in your own words.'),
-            _('Change one greeting to include the learner name.'),
-            _('Rewrite the instructions for younger learners.'),
-            _('Add a teamwork prompt before the first move.'),
-            _('Find where Journal saving will be connected.'),
-            _('Describe what this activity teaches.'),
-            _('Change one color and explain the choice.'),
-            _('Export when the preview feels ready.'),
-        ]
-        for index, text in enumerate(challenges):
-            self._sidebar_challenge_box.pack_start(
-                self._create_challenge_card(text, index), False, False, 0)
-        self._fill_sidebar_box(
-            self._sidebar_reflection_box, [],
-            _('Reflections appear here once your activity is generated.'))
-        self._fill_sidebar_box(
-            self._sidebar_annotation_box, [],
-            _('Annotations appear here once your activity is generated.'))
-
-        self._show_sidebar_tab('challenges')
+        self._show_activity_tools_page('home')
+        self._refresh_activity_tools()
         panel.show()
         return panel
 
-    def __sidebar_tab_clicked_cb(self, button, key):
-        self._show_sidebar_tab(key)
+    def _create_activity_tools_home(self):
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        page = Gtk.VBox(spacing=style.zoom(14))
+        page.set_border_width(style.zoom(2))
+        scroll.add_with_viewport(page)
 
-    def _show_sidebar_tab(self, key):
-        """Show one learning-sidebar tab body and mark its button active."""
-        for name, content in self._sidebar_content_boxes.items():
-            if name == key:
-                content.set_no_show_all(False)
-                content.show_all()
-            else:
-                content.hide()
-                content.set_no_show_all(True)
-        for name, tab in self._sidebar_tab_buttons.items():
-            ctx = tab.get_style_context()
-            if name == key:
-                ctx.add_class('create-ai-sidebar-tab-active')
-            else:
-                ctx.remove_class('create-ai-sidebar-tab-active')
+        subtitle = Gtk.Label(_('What do you want to do?'))
+        subtitle.get_style_context().add_class(
+            'create-ai-activity-tools-subtitle')
+        subtitle.set_xalign(0)
+        page.pack_start(subtitle, False, False, 0)
 
-    def _fill_sidebar_box(self, content, cards, empty_text):
-        """Replace a tab body's contents with cards, or a placeholder note."""
-        if content is None:
-            return
-        for child in content.get_children():
-            content.remove(child)
-        if cards:
-            for card in cards:
-                content.pack_start(card, False, False, 0)
-        else:
-            placeholder = Gtk.Label(empty_text)
-            placeholder.get_style_context().add_class('create-ai-meta-note')
-            placeholder.set_xalign(0)
-            placeholder.set_line_wrap(True)
-            placeholder.set_max_width_chars(26)
-            content.pack_start(placeholder, False, False, 0)
-        # Re-show only if this tab is the active (visible) one.
-        if not content.get_no_show_all():
-            content.show_all()
+        change = self._create_activity_tools_choice(
+            'view-refresh', _('Change this activity'),
+            _('Difficulty, theme, levels, or rules'),
+            _('Choose a safe change  ›'), 'change', primary=True)
+        self._activity_tools_home_first_button = change
+        page.pack_start(change, False, False, 0)
+        page.pack_start(self._create_activity_tools_choice(
+            'view-source', _('See how it works'),
+            _('Learning idea, steps, and important code'),
+            _('Explore the activity  ›'), 'understand'), False, False, 0)
 
-    def _create_sidebar_refinement_card(self):
-        card = Gtk.EventBox()
-        card.get_style_context().add_class('create-ai-learning-card')
+        safe = Gtk.EventBox()
+        safe.get_style_context().add_class(
+            'create-ai-activity-tools-safety')
+        safe_box = Gtk.VBox(spacing=style.zoom(5))
+        safe_box.set_border_width(style.zoom(12))
+        safe.add(safe_box)
+        safe_title = Gtk.Label(_('The activity keeps running safely.'))
+        safe_title.get_style_context().add_class(
+            'create-ai-activity-tools-safety-title')
+        safe_title.set_xalign(0)
+        safe_box.pack_start(safe_title, False, False, 0)
+        safe_note = Gtk.Label(
+            _('Nothing changes until you choose and confirm an action. '
+              'Validation stays on.'))
+        safe_note.get_style_context().add_class(
+            'create-ai-activity-tools-safety-note')
+        safe_note.set_xalign(0)
+        safe_note.set_line_wrap(True)
+        safe_note.set_max_width_chars(34)
+        safe_box.pack_start(safe_note, False, False, 0)
+        page.pack_start(safe, False, False, style.zoom(10))
+        scroll.show_all()
+        return scroll
 
-        box = Gtk.VBox(spacing=style.zoom(7))
-        box.set_border_width(style.zoom(10))
-        card.add(box)
-        box.show()
+    def _create_activity_tools_choice(self, icon_name, title, detail, action,
+                                      page, primary=False):
+        button = Gtk.Button()
+        button.set_relief(Gtk.ReliefStyle.NONE)
+        button.get_style_context().add_class('create-ai-activity-tools-choice')
+        if primary:
+            button.get_style_context().add_class(
+                'create-ai-activity-tools-choice-primary')
+        button.get_accessible().set_name(title)
+        button.set_tooltip_text(detail)
+        button.connect('clicked', self.__activity_tools_choice_cb, page)
 
-        title = Gtk.Label(_('Refine activity'))
-        title.get_style_context().add_class('create-ai-studio-note-label')
-        title.set_xalign(0)
-        box.pack_start(title, False, False, 0)
-        title.show()
+        row = Gtk.HBox(spacing=style.zoom(12))
+        row.set_border_width(style.zoom(12))
+        button.add(row)
 
-        note = Gtk.Label(
-            _('After generation, type another prompt to improve the current '
-              'activity.'))
-        note.get_style_context().add_class('create-ai-meta-note')
-        note.set_xalign(0)
-        note.set_line_wrap(True)
-        box.pack_start(note, False, False, 0)
-        note.show()
+        symbol = Gtk.Label('↻' if icon_name == 'view-refresh' else '?')
+        symbol.get_style_context().add_class(
+            'create-ai-activity-tools-choice-symbol')
+        if primary:
+            symbol.get_style_context().add_class(
+                'create-ai-activity-tools-choice-symbol-primary')
+        symbol.set_size_request(style.zoom(38), style.zoom(38))
+        symbol.set_valign(Gtk.Align.START)
+        row.pack_start(symbol, False, False, 0)
 
-        self._sidebar_chat_scroll = Gtk.ScrolledWindow()
-        self._sidebar_chat_scroll.set_policy(Gtk.PolicyType.NEVER,
-                                             Gtk.PolicyType.AUTOMATIC)
-        self._sidebar_chat_scroll.get_style_context().add_class(
-            'create-ai-chat-scroll')
-        self._sidebar_chat_scroll.set_size_request(-1, style.zoom(150))
-        box.pack_start(self._sidebar_chat_scroll, True, True, 0)
-        self._sidebar_chat_scroll.show()
+        labels = Gtk.VBox(spacing=style.zoom(4))
+        row.pack_start(labels, True, True, 0)
+        heading = Gtk.Label(title)
+        heading.get_style_context().add_class(
+            'create-ai-activity-tools-choice-title')
+        heading.set_xalign(0)
+        labels.pack_start(heading, False, False, 0)
+        description = Gtk.Label(detail)
+        description.get_style_context().add_class(
+            'create-ai-activity-tools-choice-detail')
+        description.set_xalign(0)
+        description.set_line_wrap(True)
+        # Keep the row's natural width small enough for the 1024px layout;
+        # Sugar labels wrap readily instead of forcing the canvas aside.
+        description.set_max_width_chars(22)
+        labels.pack_start(description, False, False, 0)
+        action_label = Gtk.Label(action)
+        action_label.get_style_context().add_class(
+            'create-ai-activity-tools-choice-action')
+        action_label.set_xalign(0)
+        labels.pack_start(action_label, False, False, style.zoom(3))
+        button.show_all()
+        return button
 
-        self._sidebar_messages_box = Gtk.VBox(spacing=style.zoom(6))
-        self._sidebar_messages_box.set_border_width(style.zoom(2))
-        self._sidebar_chat_scroll.add_with_viewport(
-            self._sidebar_messages_box)
-        self._sidebar_messages_box.show()
-        self._append_sidebar_status(
-            _('Ready for a first prompt or a refinement.'),
-            scroll=False,
-        )
-
-        row = Gtk.HBox(spacing=style.zoom(7))
-        box.pack_start(row, False, False, 0)
-        row.show()
-
-        self._sidebar_refine_entry = Gtk.Entry()
-        self._sidebar_refine_entry.set_placeholder_text(
-            _('Ask for a refinement...'))
-        self._sidebar_refine_entry.get_style_context().add_class(
-            'create-ai-chat-entry')
-        self._sidebar_refine_entry.connect(
-            'activate', self.__sidebar_refine_entry_activate_cb)
-        row.pack_start(self._sidebar_refine_entry, True, True, 0)
-        self._sidebar_refine_entry.show()
-
-        send = Gtk.Button.new_with_label(_('Refine'))
-        send.get_style_context().add_class('create-ai-chat-send')
-        send.connect('clicked', self.__sidebar_refine_send_clicked_cb)
-        row.pack_start(send, False, False, 0)
-        send.show()
-
-        self._sidebar_refine_status_label = Gtk.Label(
-            _('Generate first, then refine here.'))
-        self._sidebar_refine_status_label.get_style_context().add_class(
-            'create-ai-meta-note')
-        self._sidebar_refine_status_label.set_xalign(0)
-        self._sidebar_refine_status_label.set_line_wrap(True)
-        box.pack_start(self._sidebar_refine_status_label, False, False, 0)
-        self._sidebar_refine_status_label.show()
-
-        card.show()
-        return card
-
-    def _append_sidebar_message(self, text, from_user=False, scroll=True,
-                                reference=None):
-        # The sidebar conversation now uses the same living treatment as the
-        # main chat: bubbles drift in, the AI's reply beats a typing
-        # indicator and then streams in word-chunks.
-        if self._sidebar_messages_box is None:
-            return
-        if from_user:
-            self._add_chat_bubble(
-                text, from_user=True, scroll=scroll,
-                box=self._sidebar_messages_box,
-                scroll_cb=self.__scroll_sidebar_chat_to_bottom,
-                max_chars=32, reference=reference)
-            return
-        self._post_ai_reply(
-            self._sidebar_messages_box,
-            self.__scroll_sidebar_chat_to_bottom, text,
-            max_chars=32, typing=scroll)
-
-    def _append_sidebar_status(self, text, scroll=True):
-        if self._sidebar_messages_box is None:
-            return
-
-        row = Gtk.HBox()
-        label = Gtk.Label(_('- %s') % text)
-        label.get_style_context().add_class('create-ai-chat-status')
+    def _create_activity_tools_page_header(self, title, page_name):
+        box = Gtk.VBox(spacing=style.zoom(5))
+        back = Gtk.Button.new_with_label(_('‹ Activity Tools'))
+        back.set_relief(Gtk.ReliefStyle.NONE)
+        back.get_style_context().add_class(
+            'create-ai-activity-tools-back')
+        back.set_halign(Gtk.Align.START)
+        back.get_accessible().set_name(_('Back to Activity Tools'))
+        back.connect('clicked', self.__activity_tools_back_cb)
+        self._activity_tools_back_buttons[page_name] = back
+        box.pack_start(back, False, False, 0)
+        label = Gtk.Label(title)
+        label.get_style_context().add_class(
+            'create-ai-activity-tools-page-title')
         label.set_xalign(0)
-        label.set_line_wrap(True)
-        label.set_max_width_chars(34)
-        row.pack_start(label, True, True, 0)
-        self._sidebar_messages_box.pack_start(row, False, False, 0)
-        label.show()
-        row.show()
-        self._fade_in_widget(row)
+        box.pack_start(label, False, False, 0)
+        box.show_all()
+        return box
 
-        if scroll:
-            GObject.idle_add(self.__scroll_sidebar_chat_to_bottom)
+    def _create_activity_tools_tool_button(self, icon_name, tooltip,
+                                           on_toolbar=False):
+        """Build a Sugar ToolButton with a guaranteed Sugar SVG icon."""
+        button = ToolButton(tooltip=tooltip)
+        color = style.COLOR_WHITE if on_toolbar else style.COLOR_TOOLBAR_GREY
+        icon = Icon(
+            pixel_size=style.STANDARD_ICON_SIZE,
+            stroke_color=color.get_svg(),
+            fill_color=color.get_svg(),
+            **_sugar_action_icon_kwargs(icon_name))
+        icon.show()
+        button.set_icon_widget(icon)
+        return button
 
-    def __scroll_sidebar_chat_to_bottom(self):
-        if self._sidebar_chat_scroll is None:
-            return False
+    def _create_activity_tools_action_button(self, label, callback=None,
+                                             primary=False):
+        """Create a text action using Sugar's grayscale control language."""
+        button = Gtk.Button.new_with_label(label)
+        button.get_style_context().add_class(
+            'create-ai-activity-tools-action')
+        if primary:
+            button.get_style_context().add_class(
+                'create-ai-activity-tools-action-primary')
+        button.set_size_request(-1, style.zoom(45))
+        if callback is not None:
+            button.connect('clicked', callback)
+        button.show()
+        return button
 
-        adjustment = self._sidebar_chat_scroll.get_vadjustment()
-        adjustment.set_value(adjustment.get_upper() -
-                             adjustment.get_page_size())
+    def _create_activity_tools_change_page(self):
+        scroll = Gtk.ScrolledWindow()
+        self._activity_tools_change_scroll = scroll
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        page = Gtk.VBox(spacing=style.zoom(10))
+        page.set_border_width(style.zoom(2))
+        scroll.add_with_viewport(page)
+        page.pack_start(self._create_activity_tools_page_header(
+            _('Change this activity'), 'change'), False, False, 0)
+
+        target_title = Gtk.Label(_('What should change?'))
+        target_title.get_style_context().add_class('create-ai-meta-label')
+        target_title.set_xalign(0)
+        page.pack_start(target_title, False, False, 0)
+
+        whole = Gtk.RadioButton.new_with_label_from_widget(
+            None, _('The whole activity'))
+        selected = Gtk.RadioButton.new_with_label_from_widget(
+            whole, _('The selected preview part'))
+        self._activity_tools_whole_target = whole
+        self._activity_tools_selected_target = selected
+        whole.get_style_context().add_class(
+            'create-ai-activity-tools-radio')
+        selected.get_style_context().add_class(
+            'create-ai-activity-tools-radio')
+        page.pack_start(whole, False, False, 0)
+        page.pack_start(selected, False, False, 0)
+
+        selected_label = Gtk.Label('')
+        self._activity_tools_selected_target_label = selected_label
+        selected_label.get_style_context().add_class('create-ai-meta-note')
+        selected_label.set_xalign(0)
+        selected_label.set_line_wrap(True)
+        selected_label.set_max_width_chars(36)
+        page.pack_start(selected_label, False, False, 0)
+
+        preset_title = Gtk.Label(_('Quick changes'))
+        preset_title.get_style_context().add_class('create-ai-meta-label')
+        preset_title.set_xalign(0)
+        page.pack_start(preset_title, False, False, 0)
+
+        presets = Gtk.Grid()
+        presets.set_row_spacing(style.zoom(6))
+        presets.set_column_spacing(style.zoom(6))
+        changes = (
+            (_('Make it harder'),
+             _('Increase the challenge with one meaningful next step while '
+               'keeping the activity understandable.')),
+            (_('Change theme'),
+             _('Refresh the activity colors and visual treatment while '
+               'keeping it native to Sugar and easy to read.')),
+            (_('Add a level'),
+             _('Add one complete next level only if it fits the current '
+               'activity, including progress and feedback.')),
+            (_('Larger text'),
+             _('Increase important text and control labels while keeping '
+               'the activity layout clear and usable.')),
+        )
+        for index, (label, prompt) in enumerate(changes):
+            button = self._create_activity_tools_action_button(label)
+            button.connect('clicked', self.__activity_tools_preset_cb, prompt)
+            button.set_hexpand(True)
+            presets.attach(button, index % 2, index // 2, 1, 1)
+        page.pack_start(presets, False, False, 0)
+
+        entry = Gtk.Entry()
+        self._activity_tools_change_entry = entry
+        entry.get_style_context().add_class(
+            'create-ai-activity-tools-entry')
+        entry.set_placeholder_text(_('Describe another change…'))
+        entry.connect('activate', self.__activity_tools_plan_change_cb)
+        entry.connect('changed', self.__activity_tools_input_changed_cb)
+        whole.connect('toggled', self.__activity_tools_input_changed_cb)
+        selected.connect('toggled', self.__activity_tools_input_changed_cb)
+        page.pack_start(entry, False, False, 0)
+
+        plan_button = self._create_activity_tools_action_button(
+            _('Plan this change'), self.__activity_tools_plan_change_cb,
+            primary=True)
+        page.pack_start(plan_button, False, False, 0)
+
+        confirm = Gtk.Revealer()
+        self._activity_tools_change_confirm = confirm
+        confirm.set_transition_type(Gtk.RevealerTransitionType.SLIDE_DOWN)
+        confirm.connect('notify::child-revealed',
+                        self.__activity_tools_confirmation_revealed_cb)
+        confirm_box = Gtk.VBox(spacing=style.zoom(7))
+        confirm_box.get_style_context().add_class(
+            'create-ai-activity-tools-confirm')
+        confirm_box.set_border_width(style.zoom(10))
+        confirm.add(confirm_box)
+        confirm_title = Gtk.Label(_('CHANGE SUMMARY'))
+        confirm_title.get_style_context().add_class('create-ai-meta-label')
+        confirm_title.set_xalign(0)
+        confirm_box.pack_start(confirm_title, False, False, 0)
+        summary = Gtk.Label('')
+        self._activity_tools_change_summary = summary
+        summary.get_style_context().add_class(
+            'create-ai-activity-tools-summary')
+        summary.set_xalign(0)
+        summary.set_line_wrap(True)
+        summary.set_max_width_chars(36)
+        confirm_box.pack_start(summary, False, False, 0)
+        actions = Gtk.HBox(spacing=style.zoom(7))
+        actions.pack_start(self._create_activity_tools_action_button(
+            _('Cancel'), self.__activity_tools_cancel_change_cb),
+            False, False, 0)
+        apply_button = self._create_activity_tools_action_button(
+            _('Apply this change'), self.__activity_tools_apply_change_cb,
+            primary=True)
+        self._activity_tools_apply_button = apply_button
+        actions.pack_end(apply_button,
+            False, False, 0)
+        confirm_box.pack_start(actions, False, False, 0)
+        page.pack_start(confirm, False, False, 0)
+
+        status = Gtk.Label('')
+        self._activity_tools_change_status = status
+        status.get_style_context().add_class('create-ai-meta-note')
+        status.set_xalign(0)
+        status.set_line_wrap(True)
+        status.set_max_width_chars(38)
+        page.pack_start(status, False, False, 0)
+        scroll.show_all()
+        confirm.set_reveal_child(False)
+        return scroll
+
+    def _create_activity_tools_understand_page(self):
+        page = Gtk.VBox(spacing=style.zoom(10))
+        page.pack_start(self._create_activity_tools_page_header(
+            _('See how it works'), 'understand'), False, False, 0)
+
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        page.pack_start(scroll, True, True, 0)
+        content = Gtk.VBox(spacing=style.zoom(9))
+        content.set_border_width(style.zoom(2))
+        scroll.add_with_viewport(content)
+
+        overview = Gtk.VBox(spacing=style.zoom(8))
+        sections = Gtk.VBox(spacing=style.zoom(7))
+        self._activity_tools_understand_overview = overview
+        self._activity_tools_understand_sections = sections
+        content.pack_start(overview, False, False, 0)
+        heading = Gtk.Label(_('Important code'))
+        heading.get_style_context().add_class('create-ai-meta-label')
+        heading.set_xalign(0)
+        content.pack_start(heading, False, False, style.zoom(4))
+        content.pack_start(sections, False, False, 0)
+        page.show_all()
+        return page
+
+    def __activity_tools_choice_cb(self, button, page):
+        self._show_activity_tools_page(page)
+        GObject.idle_add(self._focus_activity_tools_page, page)
+
+    def __activity_tools_back_cb(self, button):
+        self._show_activity_tools_page('home')
+        GObject.idle_add(self._focus_activity_tools_page, 'home')
+
+    def __activity_tools_close_cb(self, button):
+        self._set_activity_tools_open(False)
+
+    def __activity_tools_key_press_cb(self, widget, event):
+        if self._sidebar_visible and event.keyval == Gdk.KEY_Escape:
+            self._set_activity_tools_open(False)
+            return True
         return False
 
-    # Accent colours for the challenge cards (match the CSS left-border
-    # classes create-ai-challenge-c0..c5).
-    _CHALLENGE_ACCENTS = (
-        '#e0603a', '#e0a13a', '#5aa65a', '#3f9b8e', '#4a90d9', '#9b6ac0')
-
-    def _create_challenge_card(self, text, index=0):
-        accent = self._CHALLENGE_ACCENTS[index % len(self._CHALLENGE_ACCENTS)]
-        card = Gtk.EventBox()
-        card.get_style_context().add_class('create-ai-challenge-card')
-        card.get_style_context().add_class(
-            'create-ai-challenge-c%d' % (index % len(self._CHALLENGE_ACCENTS)))
-
-        box = Gtk.VBox(spacing=style.zoom(6))
-        box.set_border_width(style.zoom(10))
-        card.add(box)
-        box.show()
-
-        title = Gtk.Label()
-        title.set_markup(
-            '<span weight="bold" foreground="%s">%s</span>' %
-            (accent, _('Level 1 - Cosmetic')))
-        title.get_style_context().add_class('create-ai-meta-label')
-        title.set_xalign(0)
-        box.pack_start(title, False, False, 0)
-        title.show()
-
-        body = Gtk.Label(text)
-        body.get_style_context().add_class('create-ai-studio-note-label')
-        body.set_xalign(0)
-        body.set_line_wrap(True)
-        body.set_max_width_chars(24)
-        box.pack_start(body, False, False, 0)
-        body.show()
-
-        row = Gtk.HBox(spacing=style.zoom(6))
-        box.pack_start(row, False, False, 0)
-        row.show()
-        row.pack_start(self._create_soft_pill(_('Hint')), False, False, 0)
-        row.pack_start(self._create_soft_pill(_('Done')), False, False, 0)
-
-        card.show()
-        return card
-
-    def _create_reflection_card(self, reflection, index=0):
-        """A reflection prompt card with a collapsible 'Why?' explanation."""
-        accent = self._CHALLENGE_ACCENTS[index % len(self._CHALLENGE_ACCENTS)]
-        card = Gtk.EventBox()
-        card.get_style_context().add_class('create-ai-challenge-card')
-        card.get_style_context().add_class(
-            'create-ai-challenge-c%d' % (index % len(self._CHALLENGE_ACCENTS)))
-
-        box = Gtk.VBox(spacing=style.zoom(6))
-        box.set_border_width(style.zoom(10))
-        card.add(box)
-
-        title = Gtk.Label()
-        title.set_markup(
-            '<span weight="bold" foreground="%s">%s</span>' %
-            (accent, _('Reflect')))
-        title.get_style_context().add_class('create-ai-meta-label')
-        title.set_xalign(0)
-        box.pack_start(title, False, False, 0)
-
-        body = Gtk.Label(reflection.get('question', ''))
-        body.get_style_context().add_class('create-ai-studio-note-label')
-        body.set_xalign(0)
-        body.set_line_wrap(True)
-        body.set_max_width_chars(24)
-        box.pack_start(body, False, False, 0)
-
-        why = (reflection.get('why') or '').strip()
-        if why:
-            why_label = Gtk.Label(why)
-            why_label.get_style_context().add_class('create-ai-meta-note')
-            why_label.set_xalign(0)
-            why_label.set_line_wrap(True)
-            why_label.set_max_width_chars(24)
-            why_label.set_no_show_all(True)
-            toggle = Gtk.Button.new_with_label(_('Why?'))
-            toggle.set_relief(Gtk.ReliefStyle.NONE)
-            toggle.get_style_context().add_class('create-ai-soft-pill')
-            toggle.connect('clicked', self.__reflection_why_cb, why_label)
-            box.pack_start(toggle, False, False, 0)
-            box.pack_start(why_label, False, False, 0)
-
-        card.show_all()
-        return card
-
-    def __reflection_why_cb(self, button, why_label):
-        if why_label.get_visible():
-            why_label.hide()
-        else:
-            why_label.show()
-
-    def _create_annotation_card(self, section, index=0):
-        """An annotation card: section title, line range, plain explanation."""
-        accent = self._CHALLENGE_ACCENTS[index % len(self._CHALLENGE_ACCENTS)]
-        card = Gtk.EventBox()
-        card.get_style_context().add_class('create-ai-challenge-card')
-        card.get_style_context().add_class(
-            'create-ai-challenge-c%d' % (index % len(self._CHALLENGE_ACCENTS)))
-
-        box = Gtk.VBox(spacing=style.zoom(6))
-        box.set_border_width(style.zoom(10))
-        card.add(box)
-
-        title = Gtk.Label()
-        title.set_markup(
-            '<span weight="bold" foreground="%s">%s</span>' %
-            (accent, GLib.markup_escape_text(section.get('title', ''))))
-        title.get_style_context().add_class('create-ai-meta-label')
-        title.set_xalign(0)
-        box.pack_start(title, False, False, 0)
-
-        start = section.get('line_start')
-        end = section.get('line_end')
-        if start and end and end != start:
-            lines = _('lines %(start)d–%(end)d') % {'start': start, 'end': end}
-        elif start:
-            lines = _('line %d') % start
-        else:
-            lines = ''
-        if lines:
-            line_label = Gtk.Label(lines)
-            line_label.get_style_context().add_class('create-ai-meta-note')
-            line_label.set_xalign(0)
-            box.pack_start(line_label, False, False, 0)
-
-        body = Gtk.Label(section.get('explanation', ''))
-        body.get_style_context().add_class('create-ai-studio-note-label')
-        body.set_xalign(0)
-        body.set_line_wrap(True)
-        body.set_max_width_chars(24)
-        box.pack_start(body, False, False, 0)
-
-        card.show_all()
-        return card
-
-    def _update_sidebar_learning(self, result, plan, previous_source=''):
-        """Fill the Reflections and Annotations tabs from the generated source.
-
-        When ``previous_source`` differs (a refinement), lead Reflections with
-        prompts about what the learner just changed.
-        """
-        if self._sidebar_reflection_box is None:
+    def _show_activity_tools_page(self, page):
+        if self._activity_tools_stack is None:
             return
+        if page not in ('home', 'change', 'understand'):
+            page = 'home'
+        self._refresh_activity_tools()
+        self._activity_tools_stack.set_visible_child_name(page)
+
+    def _focus_activity_tools_page(self, page):
+        if not self._sidebar_visible:
+            return False
+        target = (self._activity_tools_home_first_button if page == 'home'
+                  else self._activity_tools_back_buttons.get(page))
+        if target is not None:
+            target.grab_focus()
+        return False
+
+    def __activity_tools_preset_cb(self, button, prompt):
+        if self._activity_tools_change_entry is not None:
+            self._activity_tools_change_entry.set_text(prompt)
+            self._activity_tools_change_entry.grab_focus()
+
+    def __activity_tools_input_changed_cb(self, widget):
+        if self._activity_tools_reviewed_change is not None:
+            self._invalidate_activity_tools_review(
+                _('The request or target changed. Review it again before '
+                  'applying.'))
+
+    def _current_activity_tools_change(self):
+        entry = self._activity_tools_change_entry
+        request = entry.get_text().strip() if entry is not None else ''
+        selected = self._activity_tools_selected_target is not None and \
+            self._activity_tools_selected_target.get_active() and \
+            self._has_specific_live_edit_target()
+        target = self._live_edit_target if selected else _('the whole activity')
+        plan = getattr(self._generation_result, 'plan', None)
+        source_hash = plan.get('source_hash', '') \
+            if isinstance(plan, dict) else ''
+        return {
+            'request': request,
+            'source': 'preview' if selected else 'activity-tools',
+            'target': target,
+            'result_token': (id(self._generation_result), source_hash),
+        }
+
+    def _invalidate_activity_tools_review(self, status=''):
+        self._activity_tools_reviewed_change = None
+        self._activity_tools_confirmation_serial += 1
+        if self._activity_tools_change_confirm is not None:
+            self._activity_tools_change_confirm.set_reveal_child(False)
+        if status:
+            self._set_activity_tools_change_status(status)
+
+    def _invalidate_activity_tools_review_if_stale(self):
+        reviewed = self._activity_tools_reviewed_change
+        if reviewed is None:
+            return
+        if reviewed != self._current_activity_tools_change():
+            self._invalidate_activity_tools_review(
+                _('The activity, request, or target changed. Review the '
+                  'change again.'))
+
+    def __activity_tools_plan_change_cb(self, button):
+        entry = self._activity_tools_change_entry
+        change = self._current_activity_tools_change()
+        request = change['request']
+        if self._generation_result is None:
+            self._set_activity_tools_change_status(
+                _('Generate an activity before changing it.'))
+            return
+        if self._has_active_generation_job():
+            self._set_activity_tools_change_status(
+                _('Wait for the current generation to finish.'))
+            return
+        if not request:
+            self._set_activity_tools_change_status(
+                _('Choose a quick change or describe one first.'))
+            if entry is not None:
+                entry.grab_focus()
+            return
+        target = change['target']
+        self._activity_tools_change_summary.set_text(
+            _('Change %(target)s:\n%(request)s\n\nThe current working '
+              'version stays safe unless the new version passes its checks.')
+            % {'target': target, 'request': request})
+        self._activity_tools_reviewed_change = change
+        self._activity_tools_confirmation_serial += 1
+        serial = self._activity_tools_confirmation_serial
+        self._activity_tools_change_confirm.set_reveal_child(True)
+        self._set_activity_tools_change_status(
+            _('Review the change before applying it.'))
+        GObject.idle_add(
+            self._focus_activity_tools_confirmation, serial)
+
+    def __activity_tools_confirmation_revealed_cb(self, revealer, pspec):
+        if revealer.get_child_revealed():
+            self._scroll_activity_tools_confirmation(
+                self._activity_tools_confirmation_serial)
+
+    def _activity_tools_confirmation_is_current(self, serial):
+        return serial == self._activity_tools_confirmation_serial and \
+            self._activity_tools_reviewed_change is not None and \
+            self._activity_tools_change_confirm is not None and \
+            self._activity_tools_change_confirm.get_reveal_child()
+
+    def _scroll_activity_tools_confirmation(self, serial):
+        if not self._activity_tools_confirmation_is_current(serial):
+            return False
+        scroll = self._activity_tools_change_scroll
+        if scroll is not None:
+            adjustment = scroll.get_vadjustment()
+            adjustment.set_value(max(
+                adjustment.get_lower(),
+                adjustment.get_upper() - adjustment.get_page_size()))
+        return False
+
+    def _focus_activity_tools_confirmation(self, serial):
+        if not self._activity_tools_confirmation_is_current(serial):
+            return False
+        self._scroll_activity_tools_confirmation(serial)
+        if self._activity_tools_apply_button is not None:
+            self._activity_tools_apply_button.grab_focus()
+        return False
+
+    def __activity_tools_cancel_change_cb(self, button):
+        self._invalidate_activity_tools_review()
+        self._set_activity_tools_change_status(_('Change cancelled.'))
+
+    def __activity_tools_apply_change_cb(self, button):
+        current = self._current_activity_tools_change()
+        reviewed = self._activity_tools_reviewed_change
+        if not current['request'] or self._generation_result is None or \
+                self._has_active_generation_job():
+            self.__activity_tools_plan_change_cb(button)
+            return
+        if reviewed is None or reviewed != current:
+            self._invalidate_activity_tools_review(
+                _('Review the current request and target before applying.'))
+            self.__activity_tools_plan_change_cb(button)
+            return
+        self._invalidate_activity_tools_review()
+        self._set_activity_tools_change_status(_('Applying the change…'))
+        self._submit_refinement_from_prompt(
+            reviewed['request'], source=reviewed['source'])
+        self._set_activity_tools_open(False)
+
+    def _set_activity_tools_change_status(self, text):
+        if self._activity_tools_change_status is not None:
+            self._activity_tools_change_status.set_text(text)
+
+    def _has_specific_live_edit_target(self):
+        target = (self._live_edit_target or '').strip()
+        return bool(target and target != _('activity canvas'))
+
+    def _refresh_activity_tools(self):
+        """Refresh availability and local explanations from accepted state."""
+        has_result = self._generation_result is not None
+        if self._sidebar_toggle_button is not None:
+            self._sidebar_toggle_button.set_sensitive(
+                has_result and not self._has_active_generation_job())
+        specific_target = self._has_specific_live_edit_target()
+        if self._activity_tools_selected_target is not None:
+            self._activity_tools_selected_target.set_sensitive(
+                has_result and specific_target)
+            if not specific_target and \
+                    self._activity_tools_selected_target.get_active() and \
+                    self._activity_tools_whole_target is not None:
+                self._activity_tools_whole_target.set_active(True)
+        if self._activity_tools_selected_target_label is not None:
+            self._activity_tools_selected_target_label.set_text(
+                (_('Selected: %s') % self._live_edit_target)
+                if specific_target else
+                _('Select a preview part in Edit mode to target it here.'))
+        self._invalidate_activity_tools_review_if_stale()
+        self._refresh_activity_tools_understand()
+
+    def _clear_box(self, box):
+        if box is None:
+            return
+        for child in box.get_children():
+            child.destroy()
+
+    def _activity_tools_info_card(self, title, text):
+        card = Gtk.EventBox()
+        card.get_style_context().add_class('create-ai-learning-card')
+        box = Gtk.VBox(spacing=style.zoom(4))
+        box.set_border_width(style.zoom(9))
+        card.add(box)
+        heading = Gtk.Label(title)
+        heading.get_style_context().add_class('create-ai-meta-label')
+        heading.set_xalign(0)
+        box.pack_start(heading, False, False, 0)
+        body = Gtk.Label(text)
+        body.get_style_context().add_class('create-ai-meta-note')
+        body.set_xalign(0)
+        body.set_line_wrap(True)
+        body.set_max_width_chars(36)
+        box.pack_start(body, False, False, 0)
+        card.show_all()
+        return card
+
+    def _refresh_activity_tools_understand(self):
+        overview = self._activity_tools_understand_overview
+        sections_box = self._activity_tools_understand_sections
+        if overview is None or sections_box is None:
+            return
+        self._clear_box(overview)
+        self._clear_box(sections_box)
+        result = self._generation_result
+        if result is None:
+            overview.pack_start(self._activity_tools_info_card(
+                _('Generate an activity first'),
+                _('Its learning purpose, visible behavior, and important '
+                  'code will appear here.')), False, False, 0)
+            overview.show_all()
+            return
+
+        plan = result.plan if isinstance(result.plan, dict) else {}
+        goal = plan.get('learner_goal') or plan.get('summary') or \
+            getattr(result.spec, 'prompt', '')
+        behavior = plan.get('interaction_model') or \
+            _('The preview shows the activity’s learner interactions.')
+        steps = plan.get('learner_steps') or plan.get('classroom_flow') or []
+        if isinstance(steps, (list, tuple)):
+            steps_text = '\n'.join(
+                '%d. %s' % (index + 1, str(step))
+                for index, step in enumerate(steps[:5]))
+        else:
+            steps_text = str(steps)
+        overview.pack_start(self._activity_tools_info_card(
+            _('What it teaches'), str(goal)), False, False, 0)
+        overview.pack_start(self._activity_tools_info_card(
+            _('What the learner does'), str(behavior)), False, False, 0)
+        if steps_text:
+            overview.pack_start(self._activity_tools_info_card(
+                _('Visible steps'), steps_text), False, False, 0)
 
         source = ''
         files = getattr(result, 'files', None)
         if isinstance(files, dict):
             source = files.get('activity.py', '') or ''
-
         try:
-            from generation.reflect import (analyze_source,
-                                            reflections_for_change)
+            from generation.reflect import analyze_source
             analysis = analyze_source(source, plan)
-            change_prompts = (
-                reflections_for_change(previous_source, source)
-                if previous_source and previous_source != source else [])
         except Exception:
-            logging.exception('Learning-sidebar analysis failed')
-            analysis = {'sections': [], 'reflections': []}
-            change_prompts = []
+            logging.exception('Activity Tools source analysis failed')
+            analysis = {'sections': []}
+        sections = analysis.get('sections') or []
+        if not sections:
+            placeholder = Gtk.Label(
+                _('Important code could not be mapped, but the learning '
+                  'overview above is still available.'))
+            placeholder.get_style_context().add_class('create-ai-meta-note')
+            placeholder.set_xalign(0)
+            placeholder.set_line_wrap(True)
+            placeholder.set_max_width_chars(36)
+            sections_box.pack_start(placeholder, False, False, 0)
+        for section in sections:
+            title = section.get('title', _('Code section'))
+            start = section.get('line_start', 0)
+            end = section.get('line_end', start)
+            line_text = (_('lines %(start)d–%(end)d') % {
+                'start': start, 'end': end}) if end != start else \
+                (_('line %d') % start)
+            button = Gtk.Button()
+            button.set_relief(Gtk.ReliefStyle.NONE)
+            button.get_style_context().add_class(
+                'create-ai-activity-tools-code')
+            button.set_tooltip_text(
+                _('Open this section in Review: %s') % line_text)
+            button.get_accessible().set_name(
+                _('%(title)s, %(lines)s') % {
+                    'title': title, 'lines': line_text})
+            content = Gtk.VBox(spacing=style.zoom(3))
+            content.set_border_width(style.zoom(8))
+            button.add(content)
+            label = Gtk.Label('%s · %s' % (title, line_text))
+            label.get_style_context().add_class('create-ai-meta-label')
+            label.set_xalign(0)
+            content.pack_start(label, False, False, 0)
+            explanation = Gtk.Label(section.get('explanation', ''))
+            explanation.get_style_context().add_class('create-ai-meta-note')
+            explanation.set_xalign(0)
+            explanation.set_line_wrap(True)
+            explanation.set_max_width_chars(35)
+            content.pack_start(explanation, False, False, 0)
+            button.connect(
+                'clicked', self.__activity_tools_code_section_cb, section)
+            sections_box.pack_start(button, False, False, 0)
+        overview.show_all()
+        sections_box.show_all()
 
-        reflections = change_prompts + analysis['reflections']
-        self._fill_sidebar_box(
-            self._sidebar_reflection_box,
-            [self._create_reflection_card(reflection, index)
-             for index, reflection in enumerate(reflections)],
-            _('No reflection prompts for this activity yet.'))
-        self._fill_sidebar_box(
-            self._sidebar_annotation_box,
-            [self._create_annotation_card(section, index)
-             for index, section in enumerate(analysis['sections'])],
-            _('No annotations for this activity yet.'))
+    def __activity_tools_code_section_cb(self, button, section):
+        self._set_activity_tools_open(False)
+        self._set_review_file('activity_py')
+        self._select_studio_tab('review')
+        GObject.idle_add(
+            self._scroll_review_to_line, section.get('line_start', 1))
+
+    def _scroll_review_to_line(self, line_number):
+        if self._review_source_scroll is None or \
+                self._generation_result is None:
+            return False
+        files = getattr(self._generation_result, 'files', {})
+        source = files.get('activity.py', '') if isinstance(files, dict) else ''
+        line_count = max(1, source.count('\n') + 1)
+        fraction = max(0.0, min(1.0,
+                                (max(1, line_number) - 1) / line_count))
+        adjustment = self._review_source_scroll.get_vadjustment()
+        upper = max(0.0, adjustment.get_upper() - adjustment.get_page_size())
+        adjustment.set_value(upper * fraction)
+        return False
+
+    def _update_sidebar_learning(self, result, plan, previous_source=''):
+        """Compatibility hook: refresh the approved Activity Tools content."""
+        self._refresh_activity_tools()
 
     def _create_studio_tab(self, label, active):
         button = Gtk.Button.new_with_label(label)
@@ -5598,22 +6150,6 @@ class CreateAIActivityPanel(Gtk.EventBox):
             button.get_style_context().add_class('create-ai-studio-tab-active')
         button.show()
         return button
-
-    def _create_sidebar_tab(self, label, active):
-        button = Gtk.Button.new_with_label(label)
-        button.set_relief(Gtk.ReliefStyle.NONE)
-        button.get_style_context().add_class('create-ai-sidebar-tab')
-        if active:
-            button.get_style_context().add_class(
-                'create-ai-sidebar-tab-active')
-        button.show()
-        return button
-
-    def _create_soft_pill(self, label):
-        pill = Gtk.Label(label)
-        pill.get_style_context().add_class('create-ai-soft-pill')
-        pill.show()
-        return pill
 
     def _create_action_pill(self, label, tab_name):
         """A soft pill that navigates to a studio tab when clicked."""
@@ -5656,6 +6192,14 @@ class CreateAIActivityPanel(Gtk.EventBox):
             return
 
         from ui.theme import get_css
+
+        # The panel is also runnable from a desktop checkout where the host
+        # icon theme may otherwise substitute coloured GNOME/Web-style icons.
+        # Prefer Sugar's recolourable SVG action icons whenever they are
+        # installed; inside Sugar this path is already part of the theme.
+        sugar_icon_path = '/usr/share/icons/sugar'
+        if os.path.isdir(sugar_icon_path):
+            Gtk.IconTheme.get_default().prepend_search_path(sugar_icon_path)
 
         css_provider = Gtk.CssProvider()
         css_provider.load_from_data(get_css().encode('utf-8'))
@@ -5802,6 +6346,7 @@ class CreateAIActivityPanel(Gtk.EventBox):
         if self._ask_bar_target_label is not None:
             self._ask_bar_target_label.set_text(target)
         self._set_live_edit_status(_('Target selected: %s') % target)
+        self._refresh_activity_tools()
 
     def _attach_live_edit_handlers_to_preview(self, canvas, toolbar):
         """Walk the live preview widget tree and attach click-to-select handlers."""
@@ -5978,7 +6523,21 @@ class CreateAIActivityPanel(Gtk.EventBox):
                   if event.type == Gdk.EventType.KEY_PRESS
                   else 'key-release-event')
         try:
-            activity.emit(signal, event)
+            # PyGObject gives this callback a specialized EventKey override,
+            # while g_signal_emit expects the boxed base GdkEvent. Passing the
+            # override directly raises a conversion TypeError on real key
+            # presses. Copy the useful fields into a base event before
+            # forwarding it to handlers connected on the hidden activity.
+            forwarded = Gdk.Event.new(event.type)
+            for field in (
+                    'keyval', 'state', 'hardware_keycode', 'group', 'time',
+                    'is_modifier', 'string', 'length', 'window',
+                    'send_event'):
+                try:
+                    setattr(forwarded, field, getattr(event, field))
+                except (AttributeError, TypeError, ValueError):
+                    pass
+            activity.emit(signal, forwarded)
         except Exception:
             logging.exception('Could not forward key to preview activity')
         return False
@@ -9183,6 +9742,12 @@ if clipboard.wait_is_text_available():
         return False
 
     def __prompt_buffer_changed_cb(self, text_buffer):
+        if not self._enhance_running:
+            self._prompt_already_enhanced = False
+            self._set_enhance_chip_state(
+                _('Auto'),
+                _('Short prompts are enhanced automatically; click to '
+                  'preview the enhanced brief now'))
         if self._prompt_char_label is None:
             return
 
@@ -9211,6 +9776,14 @@ if clipboard.wait_is_text_available():
             return self._paste_prompt_from_clipboard()
         if shift and event.keyval == Gdk.KEY_Insert:
             return self._paste_prompt_from_clipboard()
+        if event.keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter):
+            # The composer follows chat-style keyboard behavior: Enter starts
+            # the complete enhance -> clarify -> generate flow, while
+            # Shift+Enter remains available for a deliberate newline.
+            if shift:
+                return False
+            self.__send_button_clicked_cb(text_view)
+            return True
         return False
 
     def _paste_prompt_from_clipboard(self):
@@ -9278,7 +9851,8 @@ if clipboard.wait_is_text_available():
         self._begin_guided_generation(prompt)
 
     def _submit_generation_from_prompt(self, prompt, chat_prompt=None,
-                                       display_prompt=None):
+                                       display_prompt=None,
+                                       already_enhanced=False):
         from core.spec import ActivitySpec
         from core.spec import name_from_prompt
 
@@ -9315,6 +9889,7 @@ if clipboard.wait_is_text_available():
             chat_prompt=chat_prompt or prompt,
             display_prompt=display_prompt or prompt,
             is_refinement=False,
+            already_enhanced=already_enhanced,
         )
 
     def _submit_refinement_from_prompt(self, refinement, source='chat',
@@ -9349,9 +9924,6 @@ if clipboard.wait_is_text_available():
             }
         if source == 'preview':
             self._set_live_edit_status(_('Refining preview...'))
-        if source == 'sidebar' and \
-                self._sidebar_refine_status_label is not None:
-            self._sidebar_refine_status_label.set_text(_('Refining...'))
         spec = self._build_refinement_spec(backend_refinement)
         self._submit_generation_spec(
             spec,
@@ -9366,33 +9938,12 @@ if clipboard.wait_is_text_available():
         result = self._generation_result
         base_spec = result.spec.normalized()
         plan = result.plan if isinstance(result.plan, dict) else {}
-        flow = plan.get('classroom_flow') or plan.get('learner_steps') or []
-        flow_text = '\n'.join('- %s' % step for step in flow[:5])
-        plan_context = self._compact_plan_for_refinement(plan)
-        original_prompt = self._aod_original_prompt or base_spec.prompt
-        prompt = (
-            'Refine the existing generated Sugar activity. Preserve working '
-            'behavior unless the new request changes it.\n\n'
-            'Original learner request:\n%(original)s\n\n'
-            'Current generated activity:\n'
-            '- Name: %(name)s\n'
-            '- Template: %(template)s\n'
-            '- Summary: %(summary)s\n'
-            '- Classroom flow:\n%(flow)s\n\n'
-            'Current plan JSON excerpt:\n%(plan_context)s\n\n'
-            'Current activity.py excerpt:\n%(source)s\n\n'
-            'Refinement request:\n%(refinement)s'
-        ) % {
-            'original': original_prompt,
-            'name': base_spec.name,
-            'template': plan.get('template', base_spec.template),
-            'summary': plan.get('summary', ''),
-            'flow': flow_text or '- Keep the activity usable for learners.',
-            'plan_context': plan_context,
-            'source': self._source_context_for_refinement(result),
-            'refinement': refinement,
-        }
-        prompt = self._limit_refinement_prompt(prompt)
+        # The refinement pipeline already supplies the complete current
+        # activity.py and its plan.  Embedding both of them inside spec.prompt
+        # duplicated thousands of tokens and, more importantly, made the old
+        # activity look like part of the teacher's *new* request.  Keep this
+        # field authoritative and focused on exactly what the teacher typed.
+        prompt = (refinement or '').strip()
         template = plan.get('template', base_spec.template)
         return ActivitySpec(
             name=base_spec.name,
@@ -9467,18 +10018,22 @@ if clipboard.wait_is_text_available():
 
     def _submit_generation_spec(self, spec, chat_prompt=None,
                                 display_prompt=None,
-                                is_refinement=False):
-        reference_sha = self._reference_pending_sha
-        reference_for_message = None
-        if reference_sha and self._reference_image is not None and \
-                self._reference_image.sha256 == reference_sha:
-            reference_for_message = self._reference_image
+                                is_refinement=False,
+                                already_enhanced=False):
+        # The image is memory-only, but it must remain authoritative for a
+        # rebuild.  Do not make delivery depend solely on the short-lived
+        # analysis marker: guided questions and rebuild transitions can clear
+        # that marker while the attachment is still visibly present.
+        reference_for_message = self._reference_image
+        reference_sha = (
+            reference_for_message.sha256
+            if reference_for_message is not None
+            else self._reference_pending_sha)
         if self._has_active_generation_job():
             if self._prompt_status_label is not None:
                 self._prompt_status_label.set_text(_('Already generating'))
-            if self._sidebar_refine_status_label is not None:
-                self._sidebar_refine_status_label.set_text(
-                    _('Wait for the current generation to finish.'))
+            self._set_activity_tools_change_status(
+                _('Wait for the current generation to finish.'))
             self._append_chat_message(
                 _('Please wait for the current activity generation to finish.'))
             return
@@ -9498,12 +10053,6 @@ if clipboard.wait_is_text_available():
             if not self._configure_selected_provider(persist=True):
                 return
 
-        if self._sidebar_refine_status_label is not None:
-            if is_refinement:
-                self._sidebar_refine_status_label.set_text(_('Refining...'))
-            else:
-                self._sidebar_refine_status_label.set_text(
-                    _('Generating activity...'))
         use_rag = (planner != 'direct'
                    and policy not in ('local', 'strict'))
         # Validation is always enabled.  It is part of the generation safety
@@ -9528,20 +10077,11 @@ if clipboard.wait_is_text_available():
         self._append_chat_message(chat_prompt or display_prompt,
                                   from_user=True,
                                   reference=reference_for_message)
-        self._append_sidebar_message(chat_prompt or display_prompt,
-                                     from_user=True,
-                                     reference=reference_for_message)
         if is_refinement:
             self._append_chat_status(_('Refining selected activity'))
-            self._append_sidebar_status(_('Refining selected activity'))
         else:
             self._append_chat_status(_('Generating activity'))
-            self._append_sidebar_status(_('Generating activity'))
         self._append_chat_status(
-            _('Planner: %s · %s') %
-            (self._get_provider_label(provider_name),
-             license_info['label']))
-        self._append_sidebar_status(
             _('Planner: %s · %s') %
             (self._get_provider_label(provider_name),
              license_info['label']))
@@ -9599,7 +10139,16 @@ if clipboard.wait_is_text_available():
                 parent_revision_id=(
                     self._aod_active_revision_id if is_refinement else ''),
                 user_prompt=chat_prompt or display_prompt,
-                enhance=self._selected_options.get('enhance', 'on') == 'on',
+                enhance=(
+                    self._selected_options.get('enhance', 'on') == 'on' and
+                    not already_enhanced
+                ),
+                reference_image_data=(
+                    reference_for_message.data
+                    if reference_for_message is not None else None),
+                reference_image_mime_type=(
+                    reference_for_message.mime_type
+                    if reference_for_message is not None else ''),
             )
         except Exception as error:
             logging.exception('Could not submit Activity on Demand job')
@@ -9607,6 +10156,8 @@ if clipboard.wait_is_text_available():
             return
 
         self._generation_job_id = job.job_id
+        self._set_activity_tools_open(False)
+        self._refresh_activity_tools()
         if reference_sha and self._reference_image is not None and \
                 self._reference_image.sha256 == reference_sha:
             self._reference_inflight_sha = reference_sha
@@ -9868,9 +10419,6 @@ if clipboard.wait_is_text_available():
                     'project': os.path.basename(result.project_path),
                 }
             )
-        if self._sidebar_refine_status_label is not None:
-            self._sidebar_refine_status_label.set_text(
-                _('Ready for another refinement.'))
         self._set_review_file(self._current_review_file)
         if self._aod_active_revision_id:
             self._selected_version = self._aod_active_revision_id
@@ -9886,18 +10434,17 @@ if clipboard.wait_is_text_available():
                     msg, from_user=False,
                     scroll=(i == len(chat_msgs) - 1))
         self._set_chat_entry_sensitive(True)
-        if announce:
-            self._append_sidebar_status(provider_status)
-            self._append_sidebar_message(
-                _('Generated. Type another prompt here to refine '
-                  'this activity.'))
-        self._update_sidebar_challenges(result, plan)
         previous_source = ''
         if announce and previous_result is not None:
             prev_files = getattr(previous_result, 'files', None)
             if isinstance(prev_files, dict):
                 previous_source = prev_files.get('activity.py', '') or ''
         self._update_sidebar_learning(result, plan, previous_source)
+        if announce and previous_result is not None:
+            self._set_activity_tools_change_status(
+                _('Change applied. The accepted version is ready to play.'))
+            if self._activity_tools_change_entry is not None:
+                self._activity_tools_change_entry.set_text('')
         if announce:
             self._clear_reference_for_completed_job(completed_job_id)
         return False
@@ -9908,7 +10455,16 @@ if clipboard.wait_is_text_available():
                 self._reference_image is None or \
                 self._reference_image.sha256 != self._reference_inflight_sha:
             return False
-        self._clear_reference_image()
+        # Keep normalized pixels in memory so Rebuild and follow-up visual
+        # refinements can still compare against the same reference. They are
+        # never serialized by AODJob/session storage and are removed by the
+        # explicit X action, reset_view(), or closing the Studio.
+        self._reference_inflight_sha = ''
+        self._reference_inflight_job_id = ''
+        self._reference_pending_sha = self._reference_image.sha256
+        self._set_reference_status(
+            _('Reference kept for rebuild. Remove it when finished.'))
+        self._update_reference_image_ui()
         return True
 
     # Sparky speaks with a little variety so it never feels canned.
@@ -9957,126 +10513,6 @@ if clipboard.wait_is_text_available():
         spec = result.spec
         name = (spec.name or _('your activity')).strip()
         return [random.choice(self._DONE_MESSAGES).format(name=name)]
-
-    def _update_sidebar_challenges(self, result, plan):
-        """Replace the learning sidebar challenge cards with activity-specific ones."""
-        if self._sidebar_challenge_box is None:
-            return
-
-        for child in self._sidebar_challenge_box.get_children():
-            self._sidebar_challenge_box.remove(child)
-
-        challenges = self._build_activity_challenges(result, plan)
-
-        for index, text in enumerate(challenges):
-            card = self._create_challenge_card(text, index)
-            self._sidebar_challenge_box.pack_start(card, False, False, 0)
-            card.show_all()
-
-        if self._sidebar_level_label is not None:
-            count = len(challenges)
-            self._sidebar_level_label.set_text(
-                _('Level 1 unlocked - %(count)d challenges') % {
-                    'count': count})
-
-    def _build_activity_challenges(self, result, plan):
-        """Return a list of activity-specific challenge strings from the plan."""
-        template = plan.get('template', '').lower()
-        activity_kind = plan.get('activity_kind', '').lower()
-        interaction = plan.get('interaction_model', '').lower()
-        features = [str(f).lower() for f in (plan.get('features') or [])]
-        learner_steps = [str(s) for s in (plan.get('learner_steps') or [])]
-        spec = result.spec
-        name = spec.name or _('the activity')
-
-        challenges = []
-
-        # 1 — always: rename the title to something personal
-        challenges.append(
-            _('Rename the activity title to reflect your own topic.'))
-
-        # 2 — learner steps → suggest modifying one of them
-        if learner_steps:
-            step_hint = learner_steps[0]
-            challenges.append(
-                _('Find the code that handles: "%(step)s" and add a hint '
-                  'message for the learner.') % {'step': step_hint})
-
-        # 3 — template/kind specific
-        if 'chess' in template or 'chess' in activity_kind:
-            challenges.append(
-                _('Locate the move-validation logic and add a console print '
-                  'for each illegal move attempt.'))
-            challenges.append(
-                _('Change the board colors and explain why you chose them.'))
-        elif 'carrom' in template or 'carrom' in activity_kind:
-            challenges.append(
-                _('Find where the striker is drawn and change its color.'))
-            challenges.append(
-                _('Locate the score counter and add a "foul" penalty.'))
-        elif 'draw' in template or 'paint' in template or 'draw' in activity_kind:
-            challenges.append(
-                _('Change the default brush size and add a label showing '
-                  'the current size.'))
-            challenges.append(
-                _('Add a "Clear canvas" button that resets the drawing.'))
-        elif 'quiz' in template or 'quiz' in activity_kind:
-            challenges.append(
-                _('Add one new question and answer to the quiz data.'))
-            challenges.append(
-                _('Change the feedback message shown when a learner answers '
-                  'incorrectly.'))
-        elif 'puzzle' in template or 'puzzle' in activity_kind:
-            challenges.append(
-                _('Find where the puzzle pieces are created and change one '
-                  "piece's image or color."))
-        elif 'story' in template or 'story' in activity_kind:
-            challenges.append(
-                _('Replace one paragraph of the story with your own version.'))
-            challenges.append(
-                _('Add a learner name field that appears at the start of '
-                  'the story.'))
-        else:
-            # Generic fallbacks for unknown templates
-            challenges.append(
-                _('Find the main label or title widget and personalise the '
-                  'text.'))
-            challenges.append(
-                _('Change one button label to make it more descriptive for '
-                  'learners.'))
-
-        # 4 — interaction-model specific
-        if 'turn' in interaction or 'multiplayer' in interaction:
-            challenges.append(
-                _('Find where turns are tracked and add a visual indicator '
-                  'showing whose turn it is.'))
-        elif 'timed' in interaction or 'timer' in interaction:
-            challenges.append(
-                _('Locate the timer logic and change the countdown duration.'))
-
-        # 5 — feature-based
-        if any('journal' in f for f in features):
-            challenges.append(
-                _('Trace the write_file / read_file methods and describe '
-                  'what data is saved to the Journal.'))
-        if any('score' in f for f in features):
-            challenges.append(
-                _('Find the score variable and add a "high score" display '
-                  'that persists across sessions.'))
-        if any('color' in f or 'colour' in f for f in features):
-            challenges.append(
-                _('Change the color scheme in the activity and note which '
-                  'variable controls each color.'))
-
-        # 6 — always: Journal connection and export
-        challenges.append(
-            _('Describe what %(name)s teaches and why it matters for '
-              'learners your age.') % {'name': name})
-        challenges.append(
-            _('Export the activity and test it by opening the XO file '
-              'in another window.'))
-
-        return challenges[:8]
 
     def _generation_provider_status_text(self, result, plan):
         fallback_reason = plan.get('provider_fallback_reason', '')
@@ -10140,9 +10576,16 @@ if clipboard.wait_is_text_available():
             self._provider_status_label.set_text(
                 _('API/generation failed: %s') %
                 self._short_provider_status(display_error))
-        if self._sidebar_refine_status_label is not None:
-            self._sidebar_refine_status_label.set_text(
-                _('Generation failed. Try a smaller refinement.'))
+        if self._generation_result is not None:
+            tools_error = _(
+                'The change was not applied. Your previous working activity '
+                'is still safe. %(error)s') % {
+                    'error': self._short_provider_status(display_error)}
+        else:
+            tools_error = _('Generation failed: %s') % \
+                self._short_provider_status(display_error)
+        self._set_activity_tools_change_status(tools_error)
+        self._refresh_activity_tools()
         if draft_source and job is not None:
             self._render_generation_failed_preview(job.job_id, display_error)
         else:
@@ -10152,8 +10595,6 @@ if clipboard.wait_is_text_available():
             if self._preview_empty_note is not None:
                 self._preview_empty_note.set_text(display_error)
         self._append_chat_status(
-            _('Generation failed: %s') % display_error)
-        self._append_sidebar_message(
             _('Generation failed: %s') % display_error)
         self._set_chat_entry_sensitive(True)
         self._set_review_file(self._current_review_file)
@@ -10257,6 +10698,8 @@ if clipboard.wait_is_text_available():
             return
 
         self._generation_job_id = job.job_id
+        self._set_activity_tools_open(False)
+        self._refresh_activity_tools()
         self._aod_session_id = job.session_id
         self._set_chat_entry_sensitive(False)
         service.watch(job.job_id, self._generation_job_callback)
@@ -10265,50 +10708,57 @@ if clipboard.wait_is_text_available():
     def __review_and_install_cb(self, button):
         self._select_studio_tab('review')
 
-    # Default width for the right learning sidebar when opened.
-    _SIDEBAR_DEFAULT_WIDTH = 500
+    # Default width for the Activity Tools overlay drawer. At supported Sugar
+    # sizes it uses at most 60% of the preview and never resizes the generated
+    # activity underneath it.
+    _SIDEBAR_DEFAULT_WIDTH = 375
+    _SIDEBAR_MIN_WIDTH = 240
+    _SIDEBAR_MAX_PREVIEW_FRACTION = 0.60
 
     def __inner_paned_size_allocate_cb(self, paned, alloc):
         if alloc.width <= 1:
             return
-
-        first_allocation = not self._inner_paned_initialised
         self._inner_paned_initialised = True
-        if id(paned) in self._paned_anim_ids:
+        # The Paned now contains only the base preview. Keeping its handle at
+        # the right edge preserves the existing anti-flash invariant while
+        # the separate Gtk.Revealer supplies the overlay drawer.
+        if paned.get_position() != alloc.width:
+            paned.set_position(alloc.width)
+        self._resize_activity_tools_drawer(alloc.width)
+
+    def _resize_activity_tools_drawer(self, preview_width=None):
+        if self._studio_right_panel is None:
             return
-        if not self._sidebar_visible:
-            # A hidden stack child can first allocate at a narrow temporary
-            # width and grow once shown. Enforce the closed edge on every
-            # later allocation instead of remembering that temporary width.
-            self._set_pane_shrink(
-                paned, self._studio_right_panel, True)
-            if paned.get_position() != alloc.width:
-                paned.set_position(alloc.width)
-        elif first_allocation:
-            paned.set_position(
-                alloc.width - style.zoom(self._SIDEBAR_DEFAULT_WIDTH))
+        if preview_width is None and self._inner_paned is not None:
+            preview_width = self._inner_paned.get_allocated_width()
+        if preview_width is None or preview_width <= 1:
+            return
+        default_width = style.zoom(self._SIDEBAR_DEFAULT_WIDTH)
+        minimum = style.zoom(self._SIDEBAR_MIN_WIDTH)
+        drawer_width = min(
+            default_width,
+            max(minimum, int(
+                preview_width * self._SIDEBAR_MAX_PREVIEW_FRACTION)))
+        self._studio_right_panel.set_size_request(drawer_width, -1)
 
     def _enforce_closed_sidebar_position(self):
         if self._sidebar_visible or self._inner_paned is None:
             return False
-        if self._studio_right_panel is not None:
-            self._studio_right_panel.set_no_show_all(True)
-            self._studio_right_panel.hide()
+        if self._sidebar_revealer is not None:
+            self._sidebar_revealer.set_reveal_child(False)
+            self._sidebar_revealer.set_no_show_all(True)
+            self._sidebar_revealer.hide()
         width = self._inner_paned.get_allocated_width()
         if width > 1:
-            self._set_pane_shrink(
-                self._inner_paned, self._studio_right_panel, True)
             if self._inner_paned.get_position() != width:
                 self._inner_paned.set_position(width)
         return False
 
     def _sidebar_open_position(self):
-        # Where the preview | sidebar divider sits when the sidebar is
-        # open: a remembered drag, or the default width from the right.
-        if self._sidebar_saved_pos is not None:
-            return self._sidebar_saved_pos
+        # Retained for callers/tests that inspect the former paned geometry.
+        # Activity Tools itself is now an overlay and does not use this value.
         width = self._inner_paned.get_allocated_width()
-        return max(0, width - style.zoom(self._SIDEBAR_DEFAULT_WIDTH))
+        return width
 
     def _animate_paned(self, paned, target, done=None):
         if paned is None:
@@ -10384,12 +10834,8 @@ if clipboard.wait_is_text_available():
                 self._left_saved_pos = self._body_paned.get_position()
                 self._collapse_pane(self._body_paned,
                                     self._studio_left_panel, 0)
-            if self._inner_paned is not None:
-                if self._sidebar_visible:
-                    self._sidebar_saved_pos = self._inner_paned.get_position()
-                self._collapse_pane(
-                    self._inner_paned, self._studio_right_panel,
-                    self._inner_paned.get_allocated_width())
+            if self._sidebar_revealer is not None:
+                self._sidebar_revealer.set_reveal_child(False)
             if self._preview_fullscreen_button is not None:
                 self._preview_fullscreen_button.set_label(
                     _('⛶ Exit Fullscreen'))
@@ -10404,10 +10850,10 @@ if clipboard.wait_is_text_available():
                     self._left_saved_pos
                     if self._left_saved_pos is not None
                     else style.zoom(455))
-            if self._inner_paned is not None and self._sidebar_visible:
-                self._expand_pane(
-                    self._inner_paned, self._studio_right_panel,
-                    self._sidebar_open_position())
+            if self._sidebar_revealer is not None and self._sidebar_visible:
+                self._sidebar_revealer.set_no_show_all(False)
+                self._sidebar_revealer.show()
+                self._sidebar_revealer.set_reveal_child(True)
             if self._preview_fullscreen_button is not None:
                 self._preview_fullscreen_button.set_label(
                     _('⛶ Fullscreen'))
@@ -10416,30 +10862,64 @@ if clipboard.wait_is_text_available():
             self._refresh_preview_layout()
 
     def __sidebar_toggle_cb(self, button):
-        self._sidebar_visible = not self._sidebar_visible
+        opening = not self._sidebar_visible
+        if opening and self._preview_is_fullscreen:
+            self.__preview_fullscreen_toggle_cb(
+                self._preview_fullscreen_button)
+        self._set_activity_tools_open(opening)
+
+    def _set_activity_tools_open(self, opened):
+        self._sidebar_visible = bool(opened)
+        if not self._sidebar_visible:
+            self._invalidate_activity_tools_review()
         if self._sidebar_toggle_button is not None:
-            self._sidebar_toggle_button.set_label(
-                _('◀ Sidebar') if self._sidebar_visible else _('▶ Sidebar'))
-        if self._inner_paned is None:
+            self._sidebar_toggle_button.set_label(_('🔧 Change'))
+            trigger_context = \
+                self._sidebar_toggle_button.get_style_context()
+            if self._sidebar_visible:
+                trigger_context.add_class(
+                    'create-ai-activity-tools-trigger-active')
+            else:
+                trigger_context.remove_class(
+                    'create-ai-activity-tools-trigger-active')
+            self._sidebar_toggle_button.set_tooltip_text(
+                _('Close Activity Tools') if self._sidebar_visible else
+                _('Activity Tools: change this activity or see how it works'))
+            self._sidebar_toggle_button.get_accessible().set_name(
+                _('Close Activity Tools') if self._sidebar_visible else
+                _('Open Activity Tools'))
+        revealer = self._sidebar_revealer
+        if revealer is None:
             return
         if self._sidebar_visible:
+            self._resize_activity_tools_drawer()
+            self._show_activity_tools_page('home')
+            revealer.set_no_show_all(False)
+            revealer.show()
             if self._studio_right_panel is not None:
-                self._studio_right_panel.set_no_show_all(False)
-                self._studio_right_panel.show()
-            self._expand_pane(
-                self._inner_paned, self._studio_right_panel,
-                self._sidebar_open_position())
+                self._studio_right_panel.show_all()
+            revealer.set_reveal_child(True)
+            if self._activity_tools_close_button is not None:
+                GObject.idle_add(self._focus_activity_tools_close)
         else:
-            self._sidebar_saved_pos = self._inner_paned.get_position()
-            if self._studio_right_panel is not None:
-                self._studio_right_panel.set_no_show_all(True)
-            self._collapse_pane(
-                self._inner_paned, self._studio_right_panel,
-                self._inner_paned.get_allocated_width(),
-                hide_after=True)
-
-    def __sidebar_reveal_done_cb(self, revealer, _param):
+            revealer.set_reveal_child(False)
+            GLib.timeout_add(260, self._hide_closed_activity_tools)
         self._refresh_preview_layout()
+
+    def _focus_activity_tools_close(self):
+        if self._sidebar_visible and \
+                self._activity_tools_close_button is not None:
+            self._activity_tools_close_button.grab_focus()
+        return False
+
+    def _hide_closed_activity_tools(self):
+        if not self._sidebar_visible and self._sidebar_revealer is not None:
+            self._sidebar_revealer.set_no_show_all(True)
+            self._sidebar_revealer.hide()
+            if self._sidebar_toggle_button is not None and \
+                    self._sidebar_toggle_button.get_sensitive():
+                self._sidebar_toggle_button.grab_focus()
+        return False
 
     def _refresh_preview_layout(self):
         GObject.idle_add(self.__do_refresh_preview_layout)
@@ -10474,6 +10954,373 @@ if clipboard.wait_is_text_available():
             self._provider_status_label.set_text(
                 _('XO packaged for export or install.'))
         return bundle_path
+
+    @staticmethod
+    def _color_button_hex(button):
+        color = button.get_rgba()
+        return '#%02X%02X%02X' % (
+            int(round(color.red * 255)),
+            int(round(color.green * 255)),
+            int(round(color.blue * 255)),
+        )
+
+    @staticmethod
+    def _set_color_button_hex(button, value):
+        color = Gdk.RGBA()
+        if not color.parse(value):
+            color.parse('#282828')
+        button.set_rgba(color)
+
+    def _request_install_icon_regeneration(self, activity_name):
+        """Return a new sanitized AI icon for the pending install."""
+        if self._generation_result is None:
+            return None
+        from dataclasses import replace
+        from generation.icons import request_icon_svg
+        from service.service import get_service
+
+        service = get_service()
+        provider_name = self._resolve_generation_provider_name(service)
+        provider = service.resolve_provider(provider_name)
+        if provider is None:
+            return None
+        spec = replace(self._generation_result.spec, name=activity_name)
+        plan = dict(self._generation_result.plan)
+        plan['name'] = activity_name
+        return request_icon_svg(provider, spec, plan)
+
+    def _prompt_install_setup(self):
+        """Review name, license, and icon before packaging an install."""
+        if self._generation_result is None:
+            return False
+
+        from generation.icons import icon_entity_colors
+        from generation.icons import render_activity_icon
+        from generation.icons import sanitize_icon_svg
+        from sugar3.graphics.xocolor import XoColor
+
+        result = self._generation_result
+        icon_path = os.path.join(
+            result.project_path, 'activity', 'activity.svg')
+        try:
+            with open(icon_path, encoding='utf-8') as icon_file:
+                installed_icon = icon_file.read()
+        except OSError:
+            installed_icon = ''
+        icon_svg = sanitize_icon_svg(installed_icon)
+        if icon_svg is None:
+            icon_svg = sanitize_icon_svg(render_activity_icon(result.plan))
+
+        default_stroke, default_fill = icon_entity_colors(installed_icon)
+        stroke = result.plan.get('icon_stroke_color', default_stroke)
+        fill = result.plan.get('icon_fill_color', default_fill)
+        state = {
+            'icon_svg': icon_svg,
+            'icon_source': result.plan.get('icon_source', 'generated'),
+            'closed': False,
+            'regenerating': False,
+            'preview_paths': [],
+        }
+
+        dialog = Gtk.Dialog(transient_for=self.get_toplevel(), modal=True)
+        dialog.set_decorated(False)
+        dialog.get_style_context().add_class('create-ai-dialog')
+        dialog.get_style_context().add_class('create-ai-install-dialog')
+        dialog.set_size_request(style.zoom(620), -1)
+
+        cancel_btn = dialog.add_button(_('Cancel'), Gtk.ResponseType.CANCEL)
+        cancel_btn.get_style_context().add_class('create-ai-dialog-cancel')
+        accept_btn = dialog.add_button(
+            _('Install & Open'), Gtk.ResponseType.ACCEPT)
+        accept_btn.get_style_context().add_class('create-ai-dialog-accept')
+        dialog.set_default_response(Gtk.ResponseType.ACCEPT)
+
+        content = dialog.get_content_area()
+        content.get_style_context().add_class('create-ai-dialog-content')
+        content.set_spacing(0)
+
+        header = Gtk.HBox()
+        header.get_style_context().add_class('create-ai-dialog-header')
+        title_label = Gtk.Label(_('Install your activity'))
+        title_label.get_style_context().add_class('create-ai-dialog-title')
+        title_label.set_xalign(0)
+        header.pack_start(title_label, True, True, 0)
+        close_btn = Gtk.Button(label='✕')
+        close_btn.set_tooltip_text(_('Close'))
+        close_btn.get_accessible().set_name(_('Close'))
+        close_btn.get_style_context().add_class('create-ai-dialog-close')
+        close_btn.connect(
+            'clicked', lambda b: dialog.response(Gtk.ResponseType.CANCEL))
+        header.pack_end(close_btn, False, False, 0)
+        content.pack_start(header, False, False, 0)
+
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroll.set_max_content_height(style.zoom(620))
+        scroll.set_propagate_natural_height(True)
+        content.pack_start(scroll, True, True, 0)
+        body = Gtk.VBox(spacing=style.zoom(14))
+        body.set_border_width(style.zoom(18))
+        scroll.add_with_viewport(body)
+
+        intro = Gtk.Label(
+            _('Confirm these details before Sugar installs the activity.'))
+        intro.get_style_context().add_class('create-ai-dialog-heading')
+        intro.set_xalign(0)
+        body.pack_start(intro, False, False, 0)
+
+        name_section = Gtk.VBox(spacing=style.zoom(6))
+        name_title = Gtk.Label(_('1  Name your activity'))
+        name_title.get_style_context().add_class(
+            'create-ai-install-section-title')
+        name_title.set_xalign(0)
+        name_section.pack_start(name_title, False, False, 0)
+        name_entry = Gtk.Entry()
+        name_entry.set_text(getattr(result.spec, 'name', '') or '')
+        name_entry.set_max_length(80)
+        name_entry.get_style_context().add_class('create-ai-dialog-entry')
+        name_entry.set_activates_default(True)
+        name_section.pack_start(name_entry, False, False, 0)
+        body.pack_start(name_section, False, False, 0)
+
+        license_section = Gtk.VBox(spacing=style.zoom(6))
+        license_title = Gtk.Label(_('2  Choose a license'))
+        license_title.get_style_context().add_class(
+            'create-ai-install-section-title')
+        license_title.set_xalign(0)
+        license_section.pack_start(license_title, False, False, 0)
+        license_combo = Gtk.ComboBoxText()
+        license_combo.get_style_context().add_class(
+            'create-ai-install-license')
+        for option in self._get_license_options():
+            license_combo.append(
+                option['spdx'], '%s — %s' % (
+                    option['label'], option['description']))
+        license_combo.set_active_id(result.spec.license_id)
+        if license_combo.get_active_id() is None:
+            license_combo.set_active_id('MIT')
+        license_section.pack_start(license_combo, False, False, 0)
+        body.pack_start(license_section, False, False, 0)
+
+        icon_section = Gtk.VBox(spacing=style.zoom(8))
+        icon_title = Gtk.Label(_('3  Review your activity icon'))
+        icon_title.get_style_context().add_class(
+            'create-ai-install-section-title')
+        icon_title.set_xalign(0)
+        icon_section.pack_start(icon_title, False, False, 0)
+
+        icon_row = Gtk.HBox(spacing=style.zoom(18))
+        preview_card = Gtk.EventBox()
+        preview_card.get_style_context().add_class(
+            'create-ai-install-icon-preview')
+        preview_card.set_size_request(style.zoom(150), style.zoom(150))
+        preview_icon = CanvasIcon(
+            file_name=icon_path,
+            pixel_size=style.zoom(110),
+            xo_color=XoColor('%s,%s' % (stroke, fill)),
+        )
+        preview_icon.set_halign(Gtk.Align.CENTER)
+        preview_icon.set_valign(Gtk.Align.CENTER)
+        preview_card.add(preview_icon)
+        icon_row.pack_start(preview_card, False, False, 0)
+
+        controls = Gtk.VBox(spacing=style.zoom(9))
+        controls.set_hexpand(True)
+        source_text = (
+            _('AI-generated icon')
+            if str(state['icon_source']).startswith('ai')
+            else _('Generated icon'))
+        source_label = Gtk.Label(source_text)
+        source_label.get_style_context().add_class(
+            'create-ai-install-icon-source')
+        source_label.set_xalign(0)
+        controls.pack_start(source_label, False, False, 0)
+
+        colors = Gtk.Grid()
+        colors.set_row_spacing(style.zoom(7))
+        colors.set_column_spacing(style.zoom(10))
+        stroke_label = Gtk.Label(_('Outline color'))
+        stroke_label.get_style_context().add_class(
+            'create-ai-install-color-label')
+        stroke_label.set_xalign(0)
+        fill_label = Gtk.Label(_('Fill color'))
+        fill_label.get_style_context().add_class(
+            'create-ai-install-color-label')
+        fill_label.set_xalign(0)
+        stroke_button = Gtk.ColorButton()
+        fill_button = Gtk.ColorButton()
+        self._set_color_button_hex(stroke_button, stroke)
+        self._set_color_button_hex(fill_button, fill)
+        stroke_button.set_title(_('Choose the icon outline color'))
+        fill_button.set_title(_('Choose the icon fill color'))
+        colors.attach(stroke_label, 0, 0, 1, 1)
+        colors.attach(stroke_button, 1, 0, 1, 1)
+        colors.attach(fill_label, 0, 1, 1, 1)
+        colors.attach(fill_button, 1, 1, 1, 1)
+        controls.pack_start(colors, False, False, 0)
+
+        icon_actions = Gtk.HBox(spacing=style.zoom(7))
+        swap_button = Gtk.Button.new_with_label(_('Swap colors'))
+        swap_button.get_style_context().add_class(
+            'create-ai-install-secondary')
+        regenerate_button = Gtk.Button.new_with_label(
+            _('Regenerate with AI'))
+        regenerate_button.get_style_context().add_class(
+            'create-ai-install-secondary')
+        icon_actions.pack_start(swap_button, False, False, 0)
+        icon_actions.pack_start(regenerate_button, False, False, 0)
+        controls.pack_start(icon_actions, False, False, 0)
+        icon_status = Gtk.Label(
+            _('You can recolor the icon or ask the model for another one.'))
+        icon_status.get_style_context().add_class(
+            'create-ai-install-icon-status')
+        icon_status.set_xalign(0)
+        icon_status.set_line_wrap(True)
+        controls.pack_start(icon_status, False, False, 0)
+        icon_row.pack_start(controls, True, True, 0)
+        icon_section.pack_start(icon_row, False, False, 0)
+        body.pack_start(icon_section, False, False, 0)
+
+        def update_preview(unused_button=None):
+            try:
+                preview_icon.props.xo_color = XoColor('%s,%s' % (
+                    self._color_button_hex(stroke_button),
+                    self._color_button_hex(fill_button)))
+                preview_icon.queue_draw()
+            except Exception:
+                logging.exception('Could not recolor install icon preview')
+
+        stroke_button.connect('color-set', update_preview)
+        fill_button.connect('color-set', update_preview)
+
+        def swap_colors(unused_button):
+            old_stroke = self._color_button_hex(stroke_button)
+            old_fill = self._color_button_hex(fill_button)
+            self._set_color_button_hex(stroke_button, old_fill)
+            self._set_color_button_hex(fill_button, old_stroke)
+            update_preview()
+
+        swap_button.connect('clicked', swap_colors)
+
+        def preview_regenerated(svg):
+            if state['closed']:
+                return False
+            state['regenerating'] = False
+            name_entry.set_sensitive(True)
+            license_combo.set_sensitive(True)
+            stroke_button.set_sensitive(True)
+            fill_button.set_sensitive(True)
+            swap_button.set_sensitive(True)
+            regenerate_button.set_sensitive(True)
+            accept_btn.set_sensitive(bool(name_entry.get_text().strip()))
+            safe = sanitize_icon_svg(svg)
+            if safe is None:
+                icon_status.set_text(
+                    _('Could not regenerate the icon. The current icon is '
+                      'still selected.'))
+                return False
+            state['icon_svg'] = safe
+            state['icon_source'] = 'ai-regenerated'
+            try:
+                descriptor, preview_path = tempfile.mkstemp(
+                    prefix='aod-install-icon-', suffix='.svg')
+                os.close(descriptor)
+                with open(preview_path, 'w', encoding='utf-8') as icon_file:
+                    icon_file.write(safe)
+                state['preview_paths'].append(preview_path)
+                preview_icon.props.file_name = preview_path
+                update_preview()
+            except OSError:
+                logging.exception('Could not prepare regenerated icon preview')
+            source_label.set_text(_('New AI-generated icon'))
+            icon_status.set_text(
+                _('New icon ready. You can keep it, recolor it, or '
+                  'regenerate again.'))
+            return False
+
+        def regenerate(unused_button):
+            activity_name = ' '.join(name_entry.get_text().split())
+            if not activity_name:
+                icon_status.set_text(_('Enter an activity name first.'))
+                return
+            state['regenerating'] = True
+            name_entry.set_sensitive(False)
+            license_combo.set_sensitive(False)
+            stroke_button.set_sensitive(False)
+            fill_button.set_sensitive(False)
+            swap_button.set_sensitive(False)
+            regenerate_button.set_sensitive(False)
+            accept_btn.set_sensitive(False)
+            icon_status.set_text(_('Generating another icon…'))
+
+            def worker():
+                try:
+                    svg = self._request_install_icon_regeneration(
+                        activity_name)
+                except Exception:
+                    logging.exception('Could not regenerate activity icon')
+                    svg = None
+                GObject.idle_add(preview_regenerated, svg)
+
+            threading.Thread(target=worker, daemon=True).start()
+
+        regenerate_button.connect('clicked', regenerate)
+
+        def name_changed(entry):
+            accept_btn.set_sensitive(
+                bool(entry.get_text().strip()) and
+                not state['regenerating'])
+
+        name_entry.connect('changed', name_changed)
+        name_changed(name_entry)
+        header.show_all()
+        scroll.show_all()
+
+        response = dialog.run()
+        activity_name = ' '.join(name_entry.get_text().split())[:80]
+        license_id = license_combo.get_active_id() or 'MIT'
+        stroke_color = self._color_button_hex(stroke_button)
+        fill_color = self._color_button_hex(fill_button)
+        state['closed'] = True
+        dialog.destroy()
+        for preview_path in state['preview_paths']:
+            try:
+                os.unlink(preview_path)
+            except OSError:
+                pass
+
+        if response != Gtk.ResponseType.ACCEPT or not activity_name:
+            return False
+
+        from generation.pipeline import apply_generation_install_options
+        try:
+            apply_generation_install_options(
+                result,
+                activity_name,
+                license_id,
+                icon_svg=state['icon_svg'],
+                stroke_color=stroke_color,
+                fill_color=fill_color,
+                icon_source=state['icon_source'],
+            )
+        except Exception as error:
+            logging.exception('Could not apply install options')
+            if self._prompt_status_label is not None:
+                self._prompt_status_label.set_text(_('Install setup failed'))
+            self._append_chat_message(
+                _('Could not prepare activity for installation: %s') % error)
+            return False
+
+        for option in self._get_license_options():
+            if option['spdx'] == license_id:
+                self._selected_options['license'] = option['value']
+                break
+        if self._preview_empty_title is not None:
+            self._preview_empty_title.set_text(activity_name)
+        self._refresh_generated_context()
+        self._append_chat_status(
+            _('Install details confirmed for "%s".') % activity_name)
+        return True
 
     def _prompt_activity_name(self):
         """Prompt the learner to name their activity before export or install.
@@ -10847,10 +11694,7 @@ if clipboard.wait_is_text_available():
                 self._prompt_status_label.set_text(_('Generate first'))
             return
 
-        if not self._prompt_activity_name():
-            return
-
-        if not self._prompt_and_apply_license(_('Install & Open')):
+        if not self._prompt_install_setup():
             return
 
         from sugar3.bundle.activitybundle import ActivityBundle
@@ -10990,28 +11834,6 @@ if clipboard.wait_is_text_available():
             prompt = text
         self._set_prompt_text(prompt)
         self._submit_generation_from_prompt(prompt, chat_prompt=text)
-
-    def __sidebar_refine_entry_activate_cb(self, entry):
-        self.__sidebar_refine_send_clicked_cb(entry)
-
-    def __sidebar_refine_send_clicked_cb(self, button):
-        if self._sidebar_refine_entry is None:
-            return
-
-        text = self._sidebar_refine_entry.get_text().strip()
-        if not text:
-            self._sidebar_refine_entry.grab_focus()
-            return
-
-        self._sidebar_refine_entry.set_text('')
-        if self._generation_result is None:
-            if self._sidebar_refine_status_label is not None:
-                self._sidebar_refine_status_label.set_text(
-                    _('Generate an activity first.'))
-            self._submit_generation_from_prompt(text, chat_prompt=text)
-            return
-
-        self._submit_refinement_from_prompt(text, source='sidebar')
 
     def __live_toggle_clicked_cb(self, button, enabled):
         self._live_edit_enabled = enabled

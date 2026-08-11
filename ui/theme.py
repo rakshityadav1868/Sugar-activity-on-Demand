@@ -1180,15 +1180,199 @@ _CSS_TEMPLATE = '''
             button.create-ai-ask-send:hover {
                 background-color: #5a5a5a;
             }
+            button.create-ai-activity-tools-trigger {
+                border-color: %(violet_soft_border)s;
+                background-color: %(violet_soft)s;
+                color: %(accent_violet)s;
+                font-weight: 700;
+            }
+            button.create-ai-activity-tools-trigger label {
+                color: %(accent_violet)s;
+            }
+            button.create-ai-activity-tools-trigger:hover,
+            button.create-ai-activity-tools-trigger-active {
+                border-color: %(accent_violet)s;
+                background-color: %(violet_soft)s;
+            }
             .create-ai-learning-sidebar {
+                border-left: 1px solid %(studio_edge)s;
+                background-color: %(studio_lavender_soft)s;
+                box-shadow: -5px 0 14px rgba(0, 0, 0, 0.10);
+            }
+            .create-ai-activity-tools-title {
+                color: %(toolbar)s;
+                font-size: 20px;
+                font-weight: 700;
+            }
+            button.create-ai-activity-tools-close {
+                border-radius: 999px;
+                border: 1px solid %(studio_edge)s;
+                background-image: none;
+                background-color: %(studio_surface)s;
+                color: %(toolbar)s;
+                padding: 0;
+                font-size: 22px;
+                font-weight: 700;
+            }
+            button.create-ai-activity-tools-close:hover {
+                border-color: %(violet_soft_border)s;
+                background-color: %(violet_soft)s;
+            }
+            button.create-ai-activity-tools-close label {
+                color: %(toolbar)s;
+            }
+            .create-ai-activity-tools-subtitle {
+                color: %(inactive_stroke)s;
+                font-size: 12px;
+            }
+            button.create-ai-activity-tools-back {
                 border: 0;
+                background-image: none;
                 background-color: transparent;
-                box-shadow: none;
+                color: %(accent_violet)s;
+                padding: 2px 0;
+                font-size: 12px;
+                font-weight: 700;
+                min-height: 24px;
+            }
+            button.create-ai-activity-tools-back:hover {
+                color: %(accent_violet_hover)s;
+                background-color: transparent;
+            }
+            button.create-ai-activity-tools-back label {
+                color: %(accent_violet)s;
+            }
+            .create-ai-activity-tools-page-title {
+                color: %(toolbar)s;
+                font-size: 17px;
+                font-weight: 700;
+            }
+            button.create-ai-activity-tools-choice,
+            button.create-ai-activity-tools-code {
+                border-radius: 15px;
+                border: 1px solid %(studio_edge)s;
+                background-image: none;
+                background-color: %(studio_surface)s;
+                color: %(toolbar)s;
+                box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+                padding: 0;
+                min-height: 122px;
+            }
+            button.create-ai-activity-tools-choice-primary {
+                border-color: %(accent_violet)s;
+                background-color: %(violet_soft)s;
+            }
+            button.create-ai-activity-tools-choice:hover,
+            button.create-ai-activity-tools-code:hover {
+                background-color: %(violet_soft)s;
+                border-color: %(accent_violet)s;
+            }
+            button.create-ai-activity-tools-code {
+                min-height: 75px;
+            }
+            .create-ai-activity-tools-choice-symbol {
+                border-radius: 999px;
+                background-color: %(teal_soft)s;
+                color: %(toolbar)s;
+                font-size: 17px;
+                font-weight: 700;
+            }
+            .create-ai-activity-tools-choice-symbol-primary {
+                background-color: %(accent_violet)s;
+                color: %(accent_text)s;
+            }
+            .create-ai-activity-tools-choice-title {
+                color: %(toolbar)s;
+                font-size: 15px;
+                font-weight: 700;
+            }
+            .create-ai-activity-tools-choice-detail {
+                color: %(inactive_stroke)s;
+                font-size: 12px;
+            }
+            .create-ai-activity-tools-choice-action {
+                color: %(accent_violet)s;
+                font-size: 12px;
+                font-weight: 700;
+            }
+            .create-ai-activity-tools-safety {
+                border-radius: 14px;
+                border: 1px solid %(bubble_ai_border)s;
+                background-color: %(bubble_ai)s;
+            }
+            .create-ai-activity-tools-safety-title {
+                color: %(toolbar)s;
+                font-size: 12px;
+                font-weight: 700;
+            }
+            .create-ai-activity-tools-safety-note {
+                color: %(inactive_stroke)s;
+                font-size: 11px;
+            }
+            .create-ai-activity-tools-confirm {
+                border-radius: 10px;
+                border: 1px solid %(studio_lavender_border)s;
+                background-color: %(studio_lavender_soft)s;
+            }
+            .create-ai-activity-tools-summary {
+                color: %(toolbar)s;
             }
             .create-ai-learning-card {
                 border-radius: 10px;
                 border: 1px solid %(studio_edge)s;
                 background-color: %(studio_surface)s;
+            }
+            .create-ai-activity-tools-radio {
+                color: %(toolbar)s;
+                background-color: transparent;
+                min-height: 45px;
+            }
+            .create-ai-activity-tools-radio label {
+                color: %(toolbar)s;
+            }
+            entry.create-ai-activity-tools-entry {
+                border-radius: 14px;
+                border: 1px solid %(studio_edge)s;
+                background-color: %(studio_surface)s;
+                background-image: none;
+                color: %(toolbar)s;
+                caret-color: %(toolbar)s;
+                min-height: 45px;
+                padding: 0 9px;
+            }
+            entry.create-ai-activity-tools-entry:focus {
+                border-color: %(studio_lavender_border)s;
+                box-shadow: 0 0 0 1px %(studio_lavender_border)s;
+            }
+            button.create-ai-activity-tools-action {
+                border-radius: 13px;
+                border: 1px solid %(studio_edge)s;
+                background-image: none;
+                background-color: %(studio_surface)s;
+                color: %(toolbar)s;
+                min-height: 45px;
+                padding: 6px 10px;
+                font-weight: 700;
+            }
+            button.create-ai-activity-tools-action label {
+                color: %(toolbar)s;
+            }
+            button.create-ai-activity-tools-action:hover {
+                background-color: %(studio_preview)s;
+                border-color: %(studio_edge)s;
+                color: %(toolbar)s;
+            }
+            button.create-ai-activity-tools-action:hover label {
+                color: %(toolbar)s;
+            }
+            button.create-ai-activity-tools-action:active,
+            button.create-ai-activity-tools-action-primary {
+                background-color: %(accent)s;
+                border-color: %(accent)s;
+                color: %(accent_text)s;
+            }
+            button.create-ai-activity-tools-action-primary label {
+                color: %(accent_text)s;
             }
             .create-ai-learning-counts {
                 border-radius: 999px;
@@ -1399,6 +1583,57 @@ _CSS_TEMPLATE = '''
                 color: %(toolbar)s;
                 font-size: 13px;
                 font-weight: 600;
+            }
+            .create-ai-install-section-title {
+                color: %(toolbar)s;
+                font-size: 13px;
+                font-weight: 700;
+            }
+            .create-ai-install-icon-preview {
+                border-radius: 18px;
+                border: 1px solid %(studio_edge)s;
+                background-color: %(studio_preview)s;
+                box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.70);
+            }
+            .create-ai-install-icon-source {
+                color: %(toolbar)s;
+                font-size: 12px;
+                font-weight: 700;
+            }
+            .create-ai-install-color-label {
+                color: %(toolbar)s;
+                font-size: 11px;
+            }
+            .create-ai-install-icon-status {
+                color: %(inactive_stroke)s;
+                font-size: 11px;
+            }
+            button.create-ai-install-secondary {
+                border-radius: 10px;
+                border: 1px solid %(studio_edge)s;
+                background-image: none;
+                background-color: %(studio_surface)s;
+                color: %(toolbar)s;
+                padding: 7px 10px;
+                font-size: 11px;
+                font-weight: 700;
+                min-height: 28px;
+            }
+            button.create-ai-install-secondary:hover {
+                border-color: %(violet_soft_border)s;
+                background-color: %(violet_soft)s;
+            }
+            button.create-ai-install-secondary label {
+                color: %(toolbar)s;
+            }
+            combobox.create-ai-install-license button {
+                border-radius: 10px;
+                border: 1px solid %(studio_edge)s;
+                background-image: none;
+                background-color: %(studio_preview)s;
+                color: %(toolbar)s;
+                padding: 7px 10px;
+                min-height: 30px;
             }
             entry.create-ai-dialog-entry {
                 border-radius: 10px;

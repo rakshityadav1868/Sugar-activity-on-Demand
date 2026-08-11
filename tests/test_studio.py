@@ -50,6 +50,31 @@ def _gtk_display_available():
 
 class TestStudioDecoupling(unittest.TestCase):
 
+    def test_learning_area_cards_use_bundled_sugar_artwork(self):
+        from ui.panel import _learning_area_icon_kwargs
+
+        for learning_area in (
+                'logic_math', 'science', 'language', 'tools_utils',
+                'games', 'creation'):
+            kwargs = _learning_area_icon_kwargs(
+                learning_area, 'image-missing')
+            self.assertEqual({'file'}, set(kwargs))
+            self.assertTrue(os.path.isfile(kwargs['file']))
+            self.assertIn(
+                os.path.join('data', 'icons', 'learning-areas'),
+                kwargs['file'])
+
+    def test_prompt_controls_use_bundled_sugar_style_icons(self):
+        from ui.panel import _prompt_control_icon_kwargs
+
+        for control in ('example', 'reference', 'send'):
+            kwargs = _prompt_control_icon_kwargs(control, 'image-missing')
+            self.assertEqual({'file'}, set(kwargs))
+            self.assertTrue(os.path.isfile(kwargs['file']))
+            self.assertIn(
+                os.path.join('data', 'icons', 'prompt-controls'),
+                kwargs['file'])
+
     def test_panel_imports_without_any_jarabe_module(self):
         code = (
             'import sys\n'
@@ -101,6 +126,30 @@ class TestStudioDecoupling(unittest.TestCase):
         self.assertTrue(limited.startswith('head'))
         self.assertTrue(limited.endswith('tail'))
 
+    def test_refinement_spec_contains_only_latest_instruction(self):
+        from types import SimpleNamespace
+
+        from core.spec import ActivitySpec
+        from ui.panel import CreateAIActivityPanel
+
+        base_spec = ActivitySpec(
+            'Swim', 'Original long swimming request.', 'games', 'MIT')
+        panel = SimpleNamespace(
+            _generation_result=SimpleNamespace(
+                spec=base_spec,
+                plan={
+                    'template': 'canvas',
+                    'summary': 'Old summary that is context, not a request.',
+                }),
+            _selected_options={'code_size': 'standard'},
+        )
+        spec = CreateAIActivityPanel._build_refinement_spec(
+            panel, 'Make the arrow keys responsive.')
+
+        self.assertEqual('Make the arrow keys responsive.', spec.prompt)
+        self.assertNotIn('Original long swimming request', spec.prompt)
+        self.assertNotIn('Old summary', spec.prompt)
+
     def test_auto_reference_provider_falls_back_to_configured_vision(self):
         from types import SimpleNamespace
 
@@ -148,15 +197,125 @@ class TestStudioDecoupling(unittest.TestCase):
 
         self.assertIsNone(provider)
 
+    def test_reference_image_candidates_fall_back_across_vision_providers(self):
+        from types import SimpleNamespace
+
+        from ui.panel import CreateAIActivityPanel
+
+        text_only_openrouter = SimpleNamespace(
+            label='OpenRouter', supports_image_input=lambda: True)
+        gemini = SimpleNamespace(
+            label='Gemini', supports_image_input=lambda: True)
+        providers = {
+            'openrouter': text_only_openrouter,
+            'gemini': gemini,
+        }
+        service = SimpleNamespace(
+            resolve_provider=lambda name: providers.get(name))
+        panel = SimpleNamespace(_selected_options={
+            'provider': 'openrouter',
+            'policy': 'default',
+            'planner': 'rag',
+        })
+
+        candidates = \
+            CreateAIActivityPanel._reference_image_candidates(panel, service,
+                                                              'openrouter')
+
+        names = [name for name, unused_provider in candidates]
+        self.assertEqual('openrouter', names[0])
+        self.assertIn('gemini', names)
+        self.assertEqual(candidates[1][1], gemini)
+
+    def test_local_policy_never_adds_cloud_reference_fallback(self):
+        from types import SimpleNamespace
+
+        from ui.panel import CreateAIActivityPanel
+
+        gemini = SimpleNamespace(
+            label='Gemini', supports_image_input=lambda: True)
+        providers = {'gemini': gemini}
+        service = SimpleNamespace(
+            resolve_provider=lambda name: providers.get(name))
+        panel = SimpleNamespace(_selected_options={
+            'provider': 'local-template',
+            'policy': 'local',
+            'planner': 'rag',
+        })
+
+        candidates = \
+            CreateAIActivityPanel._reference_image_candidates(
+                panel, service, 'local-template')
+
+        self.assertEqual([], candidates)
+
+    def test_openrouter_vision_fallback_routes_are_added(self):
+        from types import SimpleNamespace
+
+        from llm.providers import create_provider
+        from ui.panel import CreateAIActivityPanel
+        from ui.panel import _OPENROUTER_VISION_FALLBACK_MODELS
+
+        openrouter = create_provider('openrouter', api_key='or-key',
+                                     model='some/text-only-route')
+        providers = {'openrouter': openrouter}
+        service = SimpleNamespace(
+            resolve_provider=lambda name: providers.get(name))
+        panel = SimpleNamespace(_selected_options={
+            'provider': 'openrouter',
+            'policy': 'default',
+            'planner': 'rag',
+        })
+
+        candidates = \
+            CreateAIActivityPanel._reference_image_candidates(
+                panel, service, 'openrouter')
+
+        names = [name for name, unused_provider in candidates]
+        models = [provider.model for unused_name, provider in candidates]
+        self.assertEqual('openrouter', names[0])
+        self.assertEqual('some/text-only-route', models[0])
+        for vision_model in _OPENROUTER_VISION_FALLBACK_MODELS:
+            self.assertIn(vision_model, models)
+
+    def test_openrouter_vision_fallback_skips_configured_model(self):
+        from types import SimpleNamespace
+
+        from llm.providers import create_provider
+        from ui.panel import CreateAIActivityPanel
+        from ui.panel import _OPENROUTER_VISION_FALLBACK_MODELS
+
+        openrouter = create_provider(
+            'openrouter', api_key='or-key',
+            model=_OPENROUTER_VISION_FALLBACK_MODELS[0])
+        providers = {'openrouter': openrouter}
+        service = SimpleNamespace(
+            resolve_provider=lambda name: providers.get(name))
+        panel = SimpleNamespace(_selected_options={
+            'provider': 'openrouter',
+            'policy': 'default',
+            'planner': 'rag',
+        })
+
+        candidates = \
+            CreateAIActivityPanel._reference_image_candidates(
+                panel, service, 'openrouter')
+
+        models = [provider.model for unused_name, provider in candidates]
+        self.assertEqual(1, models.count(_OPENROUTER_VISION_FALLBACK_MODELS[0]))
+
 
 _OFFSCREEN_SCRIPT = '''
 import gi
 gi.require_version('Gtk', '3.0')
+gi.require_version('Gdk', '3.0')
+from gi.repository import Gdk
 from gi.repository import Gtk
 
 from ui.panel import CreateAIActivityPanel
 
 window = Gtk.OffscreenWindow()
+window.set_default_size(900, 800)
 panel = CreateAIActivityPanel()
 window.add(panel)
 window.show_all()
@@ -167,7 +326,9 @@ while Gtk.events_pending():
 assert panel._stack.get_visible_child_name() == 'home', \\
     panel._stack.get_visible_child_name()
 assert panel._sidebar_visible is False
-assert panel._sidebar_toggle_button.get_label() == '▶ Sidebar'
+assert isinstance(panel._sidebar_toggle_button, Gtk.Button)
+assert panel._sidebar_toggle_button.get_label() == '🔧 Change'
+assert not panel._sidebar_toggle_button.get_sensitive()
 assert panel._live_edit_enabled is False
 assert panel._live_edit_off_button.get_style_context().has_class(
     'create-ai-live-toggle-active')
@@ -193,12 +354,15 @@ _OFFSCREEN_HOME_SCRIPT = '''
 import json
 import os
 import tempfile
+import time
 
 sugar_home = tempfile.mkdtemp(prefix='aod-studio-home-test-')
 os.environ['SUGAR_HOME'] = sugar_home
 
 import gi
 gi.require_version('Gtk', '3.0')
+gi.require_version('Gdk', '3.0')
+from gi.repository import Gdk
 from gi.repository import Gtk
 
 from ui.panel import CreateAIActivityPanel
@@ -221,6 +385,15 @@ assert panel._home_empty_box.get_visible()
 assert len(panel._home_ring_icons) == 0
 
 assert panel._enhance_button is not None
+assert not panel._enhance_button.get_visible()
+assert panel._enhance_chip is not None
+assert panel._enhance_chip_value_label.get_text() == 'Auto'
+assert panel._prompt_status_label is not None
+assert not panel._prompt_status_label.get_visible()
+assert panel._template_hint is not None
+assert not panel._template_hint.get_visible()
+assert panel._planner_hint is not None
+assert not panel._planner_hint.get_visible()
 assert panel._selected_options['enhance'] == 'on'
 
 # "Create new" now opens the prompt directly (the MODIFY/CREATE chooser
@@ -228,6 +401,86 @@ assert panel._selected_options['enhance'] == 'on'
 panel._CreateAIActivityPanel__home_create_new_cb(None)
 pump()
 assert panel._stack.get_visible_child_name() == 'create'
+
+
+class FakeEnhancer:
+    def generate_text(self, system_prompt, user_prompt, timeout=120,
+                      stream_callback=None):
+        assert 'Do not turn a normal game' in system_prompt
+        assert 'space racer' in user_prompt
+        return ('Build a space racer with arrow-key steering, moving '
+                'obstacles, a finish line, score, and Journal-saved progress.')
+
+
+panel._resolve_active_provider = lambda: FakeEnhancer()
+panel._set_prompt_text('space racer')
+panel._enhance_chip.emit('clicked')
+deadline = time.monotonic() + 3
+while panel._enhance_running and time.monotonic() < deadline:
+    pump()
+    time.sleep(0.01)
+pump()
+assert not panel._enhance_running
+assert panel._enhance_chip_value_label.get_text() == 'Done'
+assert 'arrow-key steering' in panel._get_prompt_text()
+
+# Enter submits the complete automatic flow; Shift+Enter still inserts a
+# newline so longer prompts remain easy to write.
+submit_calls = []
+panel._CreateAIActivityPanel__send_button_clicked_cb = (
+    lambda widget: submit_calls.append(widget))
+
+class PromptKeyEvent:
+    keyval = Gdk.KEY_Return
+    state = 0
+
+assert panel._CreateAIActivityPanel__prompt_key_press_event_cb(
+    panel._prompt_text, PromptKeyEvent())
+assert submit_calls == [panel._prompt_text]
+PromptKeyEvent.state = Gdk.ModifierType.SHIFT_MASK
+assert not panel._CreateAIActivityPanel__prompt_key_press_event_cb(
+    panel._prompt_text, PromptKeyEvent())
+assert submit_calls == [panel._prompt_text]
+
+
+class FakeAutoFlowProvider:
+    def __init__(self):
+        self.question_prompt = ''
+
+    def generate_text(self, system_prompt, user_prompt, timeout=120,
+                      stream_callback=None):
+        return ('A swimming obstacle race where the player alternates arrow '
+                'keys, avoids rocks, reaches a finish line, and saves the '
+                'best time to the Journal.')
+
+    def generate_plan(self, system_prompt, user_prompt, timeout=90):
+        self.question_prompt = user_prompt
+        return {'questions': []}
+
+
+auto_provider = FakeAutoFlowProvider()
+panel._resolve_active_provider = lambda: auto_provider
+generated_prompts = []
+panel._submit_generation_from_prompt = (
+    lambda prompt, chat_prompt=None, display_prompt=None,
+    already_enhanced=False:
+    generated_prompts.append(
+        (prompt, chat_prompt, display_prompt, already_enhanced)))
+panel._set_prompt_text(
+    'swimming activity where a character avoids obstacles')
+panel._begin_guided_generation(
+    'swimming activity where a character avoids obstacles')
+deadline = time.monotonic() + 3
+while not generated_prompts and time.monotonic() < deadline:
+    pump()
+    time.sleep(0.01)
+pump()
+assert generated_prompts, generated_prompts
+assert 'alternates arrow keys' in generated_prompts[0][0]
+assert 'alternates arrow keys' in auto_provider.question_prompt
+assert generated_prompts[0][1] == (
+    'swimming activity where a character avoids obstacles')
+assert generated_prompts[0][3]
 
 panel._CreateAIActivityPanel__back_to_home_cb(None)
 pump()
@@ -329,20 +582,29 @@ from core.spec import ActivitySpec
 import service.service as service_module
 from ui.panel import CreateAIActivityPanel
 from ui.reference_image import ReferenceImage
+from sugar3.graphics.toolbutton import ToolButton
 
 window = Gtk.OffscreenWindow()
+window.set_default_size(1280, 800)
 panel = CreateAIActivityPanel()
 window.add(panel)
 window.show_all()
 panel.reset_view()
+panel._stack.set_transition_duration(0)
+panel._stack.set_visible_child_name('create')
 while Gtk.events_pending():
     Gtk.main_iteration_do(False)
+
+default_prompt_width = panel._prompt_box.get_allocated_width()
+assert default_prompt_width >= 850, default_prompt_width
 
 assert panel._ask_bar_entry is not None, 'ask bar entry missing'
 assert panel._ask_bar_reference_button is not None, \
     'reference image button missing'
 assert panel._prompt_reference_button is not None, \
     'create prompt reference image button missing'
+assert isinstance(panel._prompt_reference_button, ToolButton), \
+    'create prompt reference control is not a Sugar ToolButton'
 assert panel._reference_image is None, 'reference should start empty'
 assert not panel._ask_bar_reference_clear.get_visible(), \
     'studio remove button visible without attachment'
@@ -421,6 +683,8 @@ while Gtk.events_pending():
     Gtk.main_iteration_do(False)
 assert panel._ask_bar_reference_clear.get_visible()
 assert panel._prompt_reference_clear.get_visible()
+assert panel._prompt_box.get_allocated_width() == default_prompt_width, (
+    panel._prompt_box.get_allocated_width(), default_prompt_width)
 reference_calls = []
 panel._begin_reference_image_refinement = (
     lambda text, source: reference_calls.append((source, text)))
@@ -456,6 +720,25 @@ assert 'two large cards' in guided_calls[0][0], guided_calls
 assert guided_calls[0][1] == 'build a science observation game', guided_calls
 assert panel._reference_pending_sha == 'abc123'
 
+# Optional vision analysis must never block generation. If analysis fails,
+# continue from the activity prompt while keeping the pixels attached for the
+# code model (which may still support image input directly).
+panel._reference_analysis_running = True
+panel._reference_image_analysis_finished_cb(
+    panel._reference_analysis_serial,
+    'abc123',
+    'build a science observation game',
+    'create',
+    '',
+    'vision route temporarily unavailable',
+)
+assert len(guided_calls) == 2, guided_calls
+assert guided_calls[1] == (
+    'build a science observation game',
+    'build a science observation game'), guided_calls
+assert panel._reference_image is reference
+assert panel._reference_pending_sha == 'abc123'
+
 # Submitting the backend-expanded spec must keep the original learner prompt
 # visible. The same in-memory mockup appears in the user bubble without being
 # added to persisted session data or duplicated above the activity preview.
@@ -483,6 +766,8 @@ panel._submit_generation_spec(
 )
 assert submitted and submitted[0][0].prompt.startswith('BACKEND CONFIRMED')
 assert panel._get_prompt_text() == 'Original learner prompt'
+assert submitted[0][1]['reference_image_data'] == reference.data
+assert submitted[0][1]['reference_image_mime_type'] == 'image/png'
 
 def descendants(widget):
     found = [widget]
@@ -498,14 +783,18 @@ reference_images = [
 ]
 assert reference_images, 'left chat user bubble has no reference mockup'
 
-# A completed unrelated job must not clear the attachment. Only the exact
-# job that consumed this image owns cleanup.
+# A completed unrelated job must not alter the attachment. The exact job that
+# consumed it releases ownership but keeps the memory-only image for Rebuild.
 panel._reference_inflight_sha = 'abc123'
 panel._reference_inflight_job_id = 'reference-job'
 assert not panel._clear_reference_for_completed_job('other-job')
 assert panel._reference_image is not None
 assert panel._clear_reference_for_completed_job('reference-job')
-assert panel._reference_image is None
+assert panel._reference_image is reference
+assert panel._reference_pending_sha == 'abc123'
+assert panel._reference_inflight_sha == ''
+assert panel._reference_inflight_job_id == ''
+panel._clear_reference_image()
 window.show_all()
 while Gtk.events_pending():
     Gtk.main_iteration_do(False)
@@ -532,6 +821,18 @@ def pump():
         Gtk.main_iteration_do(False)
 
 
+def all_label_text(widget):
+    texts = []
+    getter = getattr(widget, 'get_children', None)
+    if getter is None:
+        return texts
+    for child in getter():
+        if isinstance(child, Gtk.Label):
+            texts.append(child.get_text())
+        texts.extend(all_label_text(child))
+    return texts
+
+
 window = Gtk.OffscreenWindow()
 panel = CreateAIActivityPanel()
 window.add(panel)
@@ -551,8 +852,10 @@ questions = [
      'options': ['Undo', 'Clock']},
     {'id': 'else', 'label': 'Anything else?', 'type': 'text'},
 ]
+display_prompt = 'PROMPT MUST STAY IN CHAT ONLY ' * 80
 panel._guided_state = {
-    'prompt': 'chess', 'spec': None, 'provider': None,
+    'prompt': 'chess', 'display_prompt': display_prompt,
+    'spec': None, 'provider': None,
     'questions': questions, 'answers': {}, 'answers_text': '',
     'answer_widgets': {}, 'plan_text': '', 'discussion': [],
 }
@@ -561,6 +864,9 @@ pump()
 children = panel._guided_body.get_children()
 assert children, 'questions page has no widgets'
 assert any(w.get_visible() for w in children), 'questions widgets hidden'
+labels = all_label_text(panel._guided_body)
+assert not any('PROMPT MUST STAY IN CHAT ONLY' in text for text in labels), \
+    labels
 assert set(panel._guided_state['answer_widgets']) == {
     'mode', 'features', 'else'}
 
@@ -573,15 +879,17 @@ panel._guided_state['answers'] = {'mode': 'Human vs AI'}
 # step. The answers are folded into the prompt for the normal submit path.
 captured = {}
 panel._submit_generation_from_prompt = (
-    lambda prompt, chat_prompt=None, display_prompt=None: captured.update(
+    lambda prompt, chat_prompt=None, display_prompt=None,
+    already_enhanced=False: captured.update(
         prompt=prompt, chat_prompt=chat_prompt,
-        display_prompt=display_prompt))
+        display_prompt=display_prompt,
+        already_enhanced=already_enhanced))
 panel._commit_guided_and_build()
 assert 'chess' in captured['prompt'], captured
 assert 'Confirmed requirements' in captured['prompt'], captured
 assert 'Human vs AI' in captured['prompt'], captured
-assert captured['chat_prompt'] == 'chess'
-assert captured['display_prompt'] == 'chess'
+assert captured['chat_prompt'] == display_prompt
+assert captured['display_prompt'] == display_prompt
 assert panel._guided_state is None
 
 panel.destroy()
@@ -659,7 +967,8 @@ pump()
 # visible sidebar flash.
 assert panel._guided_running
 assert panel._sidebar_visible is False
-assert not panel._studio_right_panel.get_visible()
+assert not panel._sidebar_revealer.get_reveal_child()
+assert not panel._sidebar_revealer.get_visible()
 
 questions_release.set()
 
@@ -676,7 +985,8 @@ for _ in range(400):
 
 assert ok, 'guided questions did not render after Send'
 assert panel._sidebar_visible is False
-assert not panel._studio_right_panel.get_visible()
+assert not panel._sidebar_revealer.get_reveal_child()
+assert not panel._sidebar_revealer.get_visible()
 assert abs(panel._inner_paned.get_position() -
            panel._inner_paned.get_allocated_width()) <= 1, (
     panel._inner_paned.get_position(),
@@ -820,19 +1130,38 @@ print('OFFSCREEN-STEPS-OK')
 
 
 _OFFSCREEN_LEARNING_SCRIPT = '''
+import time
 import gi
 gi.require_version('Gtk', '3.0')
-from gi.repository import Gtk
+gi.require_version('Gdk', '3.0')
+from gi.repository import Gdk, Gtk
 
 from ui.panel import CreateAIActivityPanel
 from core.spec import ActivitySpec
 from generation.generator import enrich_plan
 from generation.templates import render_activity_source
+from sugar3.graphics.toolbutton import ToolButton
 
 
 def pump():
-    while Gtk.events_pending():
-        Gtk.main_iteration_do(False)
+    for unused_index in range(20):
+        while Gtk.events_pending():
+            Gtk.main_iteration_do(False)
+        time.sleep(0.002)
+
+
+def walk(widget):
+    yield widget
+    getter = getattr(widget, 'get_children', None)
+    if getter is None:
+        return
+    for child in getter():
+        yield from walk(child)
+
+
+def all_label_text(widget):
+    return [item.get_text() for item in walk(widget)
+            if isinstance(item, Gtk.Label)]
 
 
 class FakeResult:
@@ -846,16 +1175,32 @@ class FakeResult:
 
 
 window = Gtk.OffscreenWindow()
+window.set_default_size(1024, 768)
 panel = CreateAIActivityPanel()
 window.add(panel)
 window.show_all()
 panel.reset_view()
 pump()
 
-assert panel._sidebar_reflection_box is not None
-assert panel._sidebar_annotation_box is not None
-assert set(panel._sidebar_tab_buttons) == {
-    'challenges', 'reflections', 'annotations'}
+assert panel._activity_tools_stack is not None
+assert panel._activity_tools_stack.get_visible_child_name() == 'home'
+home_labels = all_label_text(
+    panel._activity_tools_stack.get_child_by_name('home'))
+assert 'Change this activity' in home_labels, home_labels
+assert 'See how it works' in home_labels, home_labels
+assert 'The activity keeps running safely.' in home_labels, home_labels
+assert 'Fix a problem' not in home_labels, home_labels
+assert 'Challenges' not in home_labels, home_labels
+assert 'Annotations' not in home_labels, home_labels
+assert isinstance(panel._sidebar_toggle_button, Gtk.Button)
+assert not isinstance(panel._sidebar_toggle_button, ToolButton)
+assert isinstance(panel._activity_tools_close_button, Gtk.Button)
+assert not isinstance(panel._activity_tools_close_button, ToolButton)
+assert all(isinstance(button, Gtk.Button) and
+           not isinstance(button, ToolButton)
+           for button in panel._activity_tools_back_buttons.values())
+assert panel._sidebar_toggle_button.get_label() == '🔧 Change'
+assert not panel._sidebar_toggle_button.get_sensitive()
 
 spec = ActivitySpec('Fraction Quest', 'Make a fractions quiz.',
                     'logic_math', 'MIT')
@@ -863,29 +1208,148 @@ plan = enrich_plan(spec, {'template': 'quiz', 'summary': 's',
                           'learner_goal': 'g',
                           'learner_steps': ['a', 'b', 'c']})
 source = render_activity_source(spec, plan)
-
-panel._update_sidebar_learning(FakeResult(source, plan, spec), plan)
+panel._generation_result = FakeResult(source, plan, spec)
+panel._refresh_activity_tools()
+panel._stack.set_transition_duration(0)
+panel._stack.set_visible_child_name('studio')
 pump()
-refl = panel._sidebar_reflection_box.get_children()
-anno = panel._sidebar_annotation_box.get_children()
-assert len(refl) >= 4, 'reflection cards: %d' % len(refl)
-assert len(anno) >= 5, 'annotation cards: %d' % len(anno)
+assert window.get_allocated_width() <= 1024, window.get_allocated_width()
+assert panel._sidebar_toggle_button.get_sensitive()
+preview_width = panel._inner_paned.get_allocated_width()
 
-panel._show_sidebar_tab('reflections')
-pump()
-assert panel._sidebar_reflection_box.get_visible()
-assert not panel._sidebar_challenge_box.get_visible()
+# Every preview-toolbar control remains distinct at Sugar's 1024px canvas.
+# Gtk.Box may allocate overlapping children when their minimum widths exceed
+# the available preview width, so visibility alone does not prove this.
+title_alloc = panel._preview_toolbar_title.get_allocation()
+tools_alloc = panel._sidebar_toggle_button.get_allocation()
+assert title_alloc.x + title_alloc.width <= tools_alloc.x, (
+    title_alloc.x, title_alloc.width, tools_alloc.x, tools_alloc.width)
 
-new_source = source.replace('Fraction Quest', 'Fraction Adventure')
-panel._update_sidebar_learning(
-    FakeResult(new_source, plan, spec), plan, source)
+# Opening Activity Tools overlays the full-width preview; it is not a second
+# Gtk.Paned child that can crush the generated activity.
+panel._set_activity_tools_open(True)
 pump()
-assert len(panel._sidebar_reflection_box.get_children()) > len(refl)
+assert panel._sidebar_visible
+assert panel._sidebar_toggle_button.get_label() == '🔧 Change'
+assert panel._sidebar_toggle_button.get_style_context().has_class(
+    'create-ai-activity-tools-trigger-active')
+assert panel._sidebar_revealer.get_reveal_child()
+assert panel._studio_right_panel.get_parent() is panel._sidebar_revealer
+assert panel._inner_paned.get_child2() is None
+assert panel._inner_paned.get_allocated_width() == preview_width, (
+    panel._inner_paned.get_allocated_width(), preview_width)
+drawer_width = panel._studio_right_panel.get_allocated_width()
+assert drawer_width <= int(preview_width * 0.60) + 1, (
+    drawer_width, preview_width)
+assert preview_width - drawer_width >= int(preview_width * 0.40) - 1, (
+    drawer_width, preview_width)
+assert panel._activity_tools_close_button.get_allocated_width() >= 40, \
+    panel._activity_tools_close_button.get_allocated_width()
+assert panel._activity_tools_close_button.get_allocated_height() >= 40, \
+    panel._activity_tools_close_button.get_allocated_height()
+
+event = type('Event', (), {'keyval': Gdk.KEY_Escape})()
+assert panel._CreateAIActivityPanel__activity_tools_key_press_cb(
+    panel, event)
+pump()
+assert not panel._sidebar_visible
+panel._set_activity_tools_open(True)
+assert panel._sidebar_visible
+
+panel._show_activity_tools_page('understand')
+pump()
+assert panel._activity_tools_stack.get_visible_child_name() == 'understand'
+overview = panel._activity_tools_understand_overview.get_children()
+sections = panel._activity_tools_understand_sections.get_children()
+assert len(overview) >= 2, 'overview cards: %d' % len(overview)
+assert len(sections) >= 5, 'code sections: %d' % len(sections)
+
+# A quick change fills the request, then the learner must review a summary
+# before anything is submitted.
+panel._show_activity_tools_page('change')
+pump()
+change_page = panel._activity_tools_stack.get_child_by_name('change')
+panel._activity_tools_change_confirm.set_transition_duration(0)
+make_harder = next(
+    widget for widget in walk(change_page)
+    if isinstance(widget, Gtk.Button) and
+    widget.get_label() == 'Make it harder')
+assert make_harder.get_allocated_height() >= 45
+make_harder.clicked()
+assert panel._activity_tools_change_entry.get_text()
+panel._CreateAIActivityPanel__activity_tools_plan_change_cb(None)
+pump()
+assert panel._activity_tools_change_confirm.get_reveal_child()
+summary = panel._activity_tools_change_summary.get_text()
+assert 'whole activity' in summary, summary
+assert 'working version stays safe' in summary, summary
+
+# The initial focus handoff is useful, but it must not fire again and steal
+# focus after the learner has already moved back to the request field.
+panel._activity_tools_change_entry.grab_focus()
+pump()
+assert window.get_focus() is panel._activity_tools_change_entry
+time.sleep(0.27)
+pump()
+assert window.get_focus() is panel._activity_tools_change_entry
+
+# The revealed confirmation is brought into view on the constrained layout.
+panel._focus_activity_tools_confirmation(
+    panel._activity_tools_confirmation_serial)
+adjustment = change_page.get_vadjustment()
+confirm_alloc = panel._activity_tools_change_confirm.get_allocation()
+assert adjustment.get_value() > 0, adjustment.get_value()
+assert confirm_alloc.y + confirm_alloc.height <= \
+    adjustment.get_value() + adjustment.get_page_size() + 1, (
+        confirm_alloc.y, confirm_alloc.height,
+        adjustment.get_value(), adjustment.get_page_size())
+
+# Editing after Review invalidates the snapshot. Apply may review the new
+# value, but must never submit content that was not in the shown summary.
+submitted = []
+panel._submit_refinement_from_prompt = (
+    lambda request, source='chat', display_refinement=None:
+    submitted.append((request, source)))
+panel._activity_tools_change_entry.set_text('Different unreviewed request')
+assert not panel._activity_tools_change_confirm.get_reveal_child()
+panel._CreateAIActivityPanel__activity_tools_apply_change_cb(None)
+assert submitted == [], submitted
+assert panel._activity_tools_change_confirm.get_reveal_child()
+
+# A specifically selected preview target becomes available, but whole
+# activity remains the safe default until the learner chooses otherwise.
+panel._set_live_edit_target('button: Clear')
+assert panel._activity_tools_selected_target.get_sensitive()
+assert panel._activity_tools_whole_target.get_active()
+panel._activity_tools_selected_target.set_active(True)
+assert not panel._activity_tools_change_confirm.get_reveal_child()
+# A scope change after Review is also not allowed to submit until reviewed.
+panel._CreateAIActivityPanel__activity_tools_apply_change_cb(None)
+assert submitted == [], submitted
+panel._activity_tools_change_entry.set_text('Make the clear button larger')
+panel._CreateAIActivityPanel__activity_tools_plan_change_cb(None)
+panel._CreateAIActivityPanel__activity_tools_apply_change_cb(None)
+assert submitted == [('Make the clear button larger', 'preview')], submitted
+
+pump()
+assert not panel._sidebar_visible
+assert not panel._sidebar_revealer.get_reveal_child()
+
+# Important-code cards navigate to the real activity.py review surface.
+panel._set_activity_tools_open(True)
+panel._show_activity_tools_page('understand')
+pump()
+section_button = panel._activity_tools_understand_sections.get_children()[0]
+section_button.clicked()
+pump()
+assert panel._studio_mode_stack.get_visible_child_name() == 'review'
+assert panel._current_review_file == 'activity_py'
+assert not panel._sidebar_visible
 
 # Destroy the panel first: see the note in _OFFSCREEN_SCRIPT above.
 panel.destroy()
 window.destroy()
-print('OFFSCREEN-LEARNING-OK')
+print('OFFSCREEN-ACTIVITY-TOOLS-OK')
 '''
 
 
@@ -994,12 +1458,14 @@ class FakeActivity:
         self.emitted = []
 
     def emit(self, signal, event):
-        self.emitted.append(signal)
+        self.emitted.append((signal, event.type, event.keyval))
 
 
 class FakeEvent:
     def __init__(self, etype):
         self.type = etype
+        self.keyval = Gdk.KEY_Up
+        self.state = Gdk.ModifierType.CONTROL_MASK
 
 
 window = Gtk.OffscreenWindow()
@@ -1018,7 +1484,9 @@ panel._live_preview_activity = FakeActivity()
 assert forward(None, FakeEvent(Gdk.EventType.KEY_PRESS)) is False
 assert forward(None, FakeEvent(Gdk.EventType.KEY_RELEASE)) is False
 assert panel._live_preview_activity.emitted == [
-    'key-press-event', 'key-release-event'], panel._live_preview_activity.emitted
+    ('key-press-event', Gdk.EventType.KEY_PRESS, Gdk.KEY_Up),
+    ('key-release-event', Gdk.EventType.KEY_RELEASE, Gdk.KEY_Up),
+], panel._live_preview_activity.emitted
 
 # No previewed activity: forwarding is a safe no-op, never raises.
 panel._live_preview_activity = None
@@ -1096,13 +1564,13 @@ class TestStudioOffscreen(unittest.TestCase):
             % (completed.stdout, completed.stderr))
         self.assertIn('OFFSCREEN-GUIDED-OK', completed.stdout)
 
-    def test_learning_sidebar_populates_and_switches_tabs(self):
+    def test_activity_tools_has_two_directions_and_safe_change_review(self):
         completed = self._run_offscreen(_OFFSCREEN_LEARNING_SCRIPT)
         self.assertEqual(
             0, completed.returncode,
-            'offscreen learning-sidebar test failed:\n%s%s'
+            'offscreen Activity Tools test failed:\n%s%s'
             % (completed.stdout, completed.stderr))
-        self.assertIn('OFFSCREEN-LEARNING-OK', completed.stdout)
+        self.assertIn('OFFSCREEN-ACTIVITY-TOOLS-OK', completed.stdout)
 
     def test_versions_compare_uses_real_revisions(self):
         completed = self._run_offscreen(_OFFSCREEN_VERSIONS_SCRIPT)
@@ -1151,6 +1619,14 @@ class TestStudioOffscreen(unittest.TestCase):
             'offscreen prompt activity name test failed:\n%s%s'
             % (completed.stdout, completed.stderr))
         self.assertIn('OFFSCREEN-PROMPT-NAME-OK', completed.stdout)
+
+    def test_install_setup_applies_name_license_and_icon_colors(self):
+        completed = self._run_offscreen(_OFFSCREEN_INSTALL_SETUP_SCRIPT)
+        self.assertEqual(
+            0, completed.returncode,
+            'offscreen install setup test failed:\n%s%s'
+            % (completed.stdout, completed.stderr))
+        self.assertIn('OFFSCREEN-INSTALL-SETUP-OK', completed.stdout)
 
 
 _OFFSCREEN_PROMPT_NAME_SCRIPT = '''
@@ -1222,6 +1698,111 @@ print('OFFSCREEN-PROMPT-NAME-OK')
 '''
 
 
+_OFFSCREEN_INSTALL_SETUP_SCRIPT = '''
+import os
+import shutil
+import tempfile
+
+import gi
+gi.require_version('Gtk', '3.0')
+gi.require_version('Gdk', '3.0')
+from gi.repository import Gdk, Gtk
+
+from core.spec import ActivitySpec
+from generation.generator import create_prototype_activity
+from ui.panel import CreateAIActivityPanel
+
+
+def walk(widget):
+    yield widget
+    getter = getattr(widget, 'get_children', None)
+    if getter is None:
+        return
+    for child in getter():
+        yield from walk(child)
+
+
+project_root = tempfile.mkdtemp(prefix='aod-install-setup-test-')
+result = create_prototype_activity(
+    ActivitySpec(
+        'Old Garden', 'Create a garden drawing activity.',
+        'creation', 'MIT', template='canvas'),
+    project_root,
+)
+
+window = Gtk.OffscreenWindow()
+panel = CreateAIActivityPanel()
+window.add(panel)
+window.show_all()
+panel._generation_result = result
+
+original_run = Gtk.Dialog.run
+
+original_icon = result.files['activity/activity.svg']
+Gtk.Dialog.run = lambda dialog: Gtk.ResponseType.CANCEL
+cancelled = panel._prompt_install_setup()
+assert not cancelled
+assert result.spec.name == 'Old Garden', result.spec.name
+assert result.spec.license_id == 'MIT', result.spec.license_id
+assert result.files['activity/activity.svg'] == original_icon
+
+
+def mock_run(dialog):
+    widgets = list(walk(dialog.get_content_area()))
+    labels = [widget.get_text() for widget in widgets
+              if isinstance(widget, Gtk.Label)]
+    assert '1  Name your activity' in labels, labels
+    assert '2  Choose a license' in labels, labels
+    assert '3  Review your activity icon' in labels, labels
+    assert 'Regenerate with AI' in labels, labels
+
+    entry = next(widget for widget in widgets
+                 if isinstance(widget, Gtk.Entry))
+    entry.set_text('My Garden Lab')
+    license_combo = next(widget for widget in widgets
+                         if isinstance(widget, Gtk.ComboBoxText))
+    license_combo.set_active_id('GPL-3.0-or-later')
+    color_buttons = [widget for widget in widgets
+                     if isinstance(widget, Gtk.ColorButton)]
+    assert len(color_buttons) == 2, len(color_buttons)
+    outline_button = next(
+        button for button in color_buttons
+        if button.get_title() == 'Choose the icon outline color')
+    fill_button = next(
+        button for button in color_buttons
+        if button.get_title() == 'Choose the icon fill color')
+    outline = Gdk.RGBA()
+    fill = Gdk.RGBA()
+    assert outline.parse('#245A44')
+    assert fill.parse('#D9F0EA')
+    outline_button.set_rgba(outline)
+    fill_button.set_rgba(fill)
+    return Gtk.ResponseType.ACCEPT
+
+
+Gtk.Dialog.run = mock_run
+try:
+    accepted = panel._prompt_install_setup()
+finally:
+    Gtk.Dialog.run = original_run
+
+assert accepted
+assert result.spec.name == 'My Garden Lab', result.spec.name
+assert result.spec.license_id == 'GPL-3.0-or-later', result.spec.license_id
+info = result.files['activity/activity.info']
+assert 'name = My Garden Lab' in info, info
+assert 'license = GPL-3.0-or-later' in info, info
+icon = result.files['activity/activity.svg']
+assert '<!ENTITY stroke_color "#245A44">' in icon, icon[:300]
+assert '<!ENTITY fill_color "#D9F0EA">' in icon, icon[:300]
+assert result.bundle_path == '', result.bundle_path
+
+panel.destroy()
+window.destroy()
+shutil.rmtree(project_root)
+print('OFFSCREEN-INSTALL-SETUP-OK')
+'''
+
+
 if __name__ == '__main__':
     unittest.main()
-
