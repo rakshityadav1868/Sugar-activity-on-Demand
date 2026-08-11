@@ -23,8 +23,8 @@ from generation.prompts import extract_json_object
 _QUESTIONS_TIMEOUT = 90
 _PLAN_TIMEOUT = 120
 
-_MIN_QUESTIONS = 2
-_MAX_QUESTIONS = 6
+_MIN_QUESTIONS = 0
+_MAX_QUESTIONS = 4
 _MAX_OPTIONS = 6
 _QUESTION_TYPES = ('single', 'multi', 'text')
 
@@ -35,9 +35,9 @@ def build_questions_system_prompt():
     return (
         'You are Sugar Activity on Demand, a friendly clarification '
         'assistant.\n'
-        "Given a learner's short activity idea, ask a few tailored "
-        'questions that would most change what gets built (scope, mode, '
-        'difficulty, key features, look).\n'
+        "Given the learner's complete request context, ask only unresolved "
+        'questions that would materially change what gets built. The context '
+        'may include a Reference image brief produced by a vision model.\n'
         'Return a SINGLE JSON object and nothing else:\n'
         '{\n'
         '  "questions": [\n'
@@ -48,10 +48,26 @@ def build_questions_system_prompt():
         '}\n'
         'Rules:\n'
         '- Between %d and %d questions, ordered most important first.\n'
+        '- Zero questions is the correct result when the request and '
+        'reference already determine the important choices. Return '
+        '{"questions": []} in that case.\n'
+        '- Before adding each question, verify that its answer is absent from '
+        'the learner request AND every reference-image section. Treat visible '
+        'layout, controls, labels, palette, hierarchy, interaction cues, and '
+        'Visible decisions as facts that are already answered.\n'
+        '- Reference Uncertainties are possible question topics, not a quota. '
+        'Ask about one only when resolving it would materially change scope, '
+        'behavior, or the learning experience.\n'
+        '- Never ask the learner to repeat, confirm, choose, or describe '
+        'something already shown in the reference. Never ask a generic '
+        'catch-all question.\n'
         '- "single": pick one option. "multi": pick several. "text": free '
         'text (omit options).\n'
         '- Give 2 to %d concise options for single/multi questions.\n'
         '- Questions must be specific to THIS idea, not generic.\n'
+        '- Learning-area cards are optional discovery tags. Do not ask how '
+        'to add math, language, science, assessment, reflection, or classroom '
+        'content unless the learner idea already requests that content.\n'
         '- No markdown, no comments, no prose outside the JSON object.'
         % (_MIN_QUESTIONS, _MAX_QUESTIONS, _MAX_OPTIONS)
     )
@@ -59,8 +75,9 @@ def build_questions_system_prompt():
 
 def build_questions_user_prompt(spec):
     return (
-        'Learner idea: %s\n'
-        'Selected learning areas: %s\n'
+        'Complete learner request context (including any analyzed reference '
+        'facts):\n%s\n'
+        'Optional discovery tags (do not inject as features): %s\n'
         'Age band: %s'
         % (spec.prompt, ', '.join(spec.learning_categories()), spec.age_band)
     )
@@ -70,6 +87,12 @@ def build_plan_system_prompt():
     return (
         'You are Sugar Activity on Demand, a friendly planning assistant '
         'for Sugar (GTK3) learning activities.\n'
+        "Treat the learner's idea as the product definition. Learning-area "
+        'cards are discovery hints only. Do not add math, vocabulary, quiz, '
+        'assessment, reflection, explanation, classroom, or partner mechanics '
+        'unless the idea, confirmed answers, or reference image asks for them. '
+        'A race must remain a race; a drawing request must remain a drawing '
+        'activity; a utility request must remain that utility.\n'
         'Propose a short, concrete build plan the learner can approve or '
         'adjust before you generate the activity.\n'
         'Cover, as short lines or bullets:\n'
@@ -89,7 +112,7 @@ def build_plan_user_prompt(spec, answers_text, discussion=''):
     parts = [
         'Activity name: %s' % spec.name,
         'Learner idea: %s' % spec.prompt,
-        'Selected learning areas: %s' % ', '.join(
+        'Optional discovery tags (do not inject as features): %s' % ', '.join(
             spec.learning_categories()),
         'Age band: %s' % spec.age_band,
     ]
@@ -131,16 +154,7 @@ def generate_questions(provider, spec, timeout=_QUESTIONS_TIMEOUT):
             logging.warning('Clarifying questions were not JSON: %s', error)
             return []
 
-    questions = _normalize_questions(payload.get('questions'))
-    # Always leave room for the learner to say something in their own
-    # words, like the "Anything else?" field in the reference flow.
-    if questions and not any(q['type'] == 'text' for q in questions):
-        questions.append({
-            'id': 'anything_else',
-            'label': 'Anything else to add?',
-            'type': 'text',
-        })
-    return questions
+    return _normalize_questions(payload.get('questions'))
 
 
 def generate_plan_proposal(provider, spec, answers_text='', discussion='',
@@ -197,17 +211,29 @@ def format_answers(questions, answers):
 
 
 def build_activity_prompt(base_prompt, answers_text='', plan_text=''):
-    """Fold the confirmed answers and agreed plan into the activity prompt."""
-    sections = []
+    """Fold guided context in without truncating the reference brief.
+
+    The base prompt can contain the analyzed reference contract.  Reserve its
+    complete bounded text first; supplemental answers/plan are useful, but
+    must never push the reference off the end of MAX_PROMPT_LENGTH.
+    """
+    base = (base_prompt or '').strip()[:MAX_PROMPT_LENGTH]
+    supplemental = []
     if answers_text:
-        sections.append(answers_text)
+        supplemental.append(answers_text.strip())
     if plan_text:
-        sections.append('%s\n%s' % (AGREED_PLAN_HEADER, plan_text.strip()))
-    sections.append(base_prompt.strip())
-    combined = '\n\n'.join(section for section in sections if section)
-    if len(combined) > MAX_PROMPT_LENGTH:
-        combined = combined[:MAX_PROMPT_LENGTH].rstrip()
-    return combined
+        supplemental.append('%s\n%s' % (
+            AGREED_PLAN_HEADER, plan_text.strip()))
+    extra = '\n\n'.join(section for section in supplemental if section)
+    if not extra:
+        return base
+    separator = '\n\n'
+    available = max(0, MAX_PROMPT_LENGTH - len(base) - len(separator))
+    if available <= 0:
+        return base
+    if len(extra) > available:
+        extra = extra[:available].rstrip()
+    return '%s%s%s' % (extra, separator, base)
 
 
 def _normalize_questions(raw_questions):

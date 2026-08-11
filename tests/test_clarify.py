@@ -9,6 +9,7 @@ from core.spec import ActivitySpec
 from core.spec import MAX_PROMPT_LENGTH
 from llm.clarify import build_activity_prompt
 from llm.clarify import build_questions_system_prompt
+from llm.clarify import build_plan_system_prompt
 from llm.clarify import format_answers
 from llm.clarify import generate_plan_proposal
 from llm.clarify import generate_questions
@@ -63,6 +64,12 @@ class _PlanProvider:
 
 class TestGenerateQuestions(unittest.TestCase):
 
+    def test_plan_prompt_keeps_activity_first(self):
+        prompt = build_plan_system_prompt()
+        self.assertIn('idea as the product definition', prompt)
+        self.assertIn('A race must remain a race', prompt)
+        self.assertIn('Do not add math', prompt)
+
     def test_valid_payload_is_normalized(self):
         provider = _QuestionProvider({'questions': [
             {'id': 'Mode', 'label': 'Who plays?', 'type': 'single',
@@ -103,13 +110,15 @@ class TestGenerateQuestions(unittest.TestCase):
         self.assertEqual('text', questions[0]['type'])
         self.assertNotIn('options', questions[0])
 
-    def test_too_few_questions_returns_empty(self):
+    def test_one_material_question_is_kept(self):
         provider = _QuestionProvider({'questions': [
             {'id': 'a', 'label': 'Only one?', 'type': 'text'},
         ]})
-        self.assertEqual([], generate_questions(provider, _spec()))
+        questions = generate_questions(provider, _spec())
+        self.assertEqual(1, len(questions))
+        self.assertEqual('a', questions[0]['id'])
 
-    def test_appends_free_text_catch_all_when_missing(self):
+    def test_does_not_append_generic_catch_all(self):
         provider = _QuestionProvider({'questions': [
             {'id': 'a', 'label': 'One?', 'type': 'single',
              'options': ['x', 'y']},
@@ -117,8 +126,8 @@ class TestGenerateQuestions(unittest.TestCase):
              'options': ['p', 'q']},
         ]})
         questions = generate_questions(provider, _spec())
-        self.assertEqual('text', questions[-1]['type'])
-        self.assertEqual('anything_else', questions[-1]['id'])
+        self.assertEqual(2, len(questions))
+        self.assertTrue(all(q['id'] != 'anything_else' for q in questions))
 
     def test_does_not_append_when_text_present(self):
         provider = _QuestionProvider({'questions': [
@@ -138,6 +147,30 @@ class TestGenerateQuestions(unittest.TestCase):
     def test_bad_json_returns_empty(self):
         self.assertEqual(
             [], generate_questions(_JsonTextProvider('not json'), _spec()))
+
+    def test_provider_can_return_no_questions_when_context_is_complete(self):
+        provider = _QuestionProvider({'questions': []})
+        self.assertEqual([], generate_questions(provider, _spec()))
+
+    def test_reference_facts_are_passed_with_no_repeat_rules(self):
+        spec = ActivitySpec(
+            'Drawing',
+            'Student request:\nMake a symmetry activity\n\n'
+            'Reference image brief:\n'
+            '- Visible decisions: three tools and a cyan palette\n'
+            '- Uncertainties: whether progress is saved',
+            'creation',
+            'MIT',
+        )
+        provider = _QuestionProvider({'questions': []})
+
+        generate_questions(provider, spec)
+
+        system_prompt, user_prompt = provider.calls[0]
+        self.assertIn('Zero questions is the correct result', system_prompt)
+        self.assertIn('already answered', system_prompt)
+        self.assertIn('Visible decisions', user_prompt)
+        self.assertIn('three tools and a cyan palette', user_prompt)
 
 
 class TestGeneratePlanProposal(unittest.TestCase):
@@ -202,6 +235,23 @@ class TestBuildActivityPrompt(unittest.TestCase):
     def test_truncates_to_max_length(self):
         combined = build_activity_prompt('x' * (MAX_PROMPT_LENGTH + 500))
         self.assertLessEqual(len(combined), MAX_PROMPT_LENGTH)
+
+    def test_long_guided_context_cannot_truncate_reference_brief(self):
+        base = (
+            'Student request:\nMatch this activity.\n\n'
+            'Reference image brief:\n'
+            '- Layout: left tools, center canvas, right challenge\n'
+            '- Visible decisions: keep every control in place\n'
+            '- Reference contract end marker')
+        combined = build_activity_prompt(
+            base,
+            'Confirmed requirements:\n' + ('answer ' * 3000),
+            'plan ' * 3000,
+        )
+
+        self.assertLessEqual(len(combined), MAX_PROMPT_LENGTH)
+        self.assertIn('Reference image brief', combined)
+        self.assertIn('Reference contract end marker', combined)
 
     def test_system_prompt_requests_json(self):
         self.assertIn('JSON', build_questions_system_prompt())
