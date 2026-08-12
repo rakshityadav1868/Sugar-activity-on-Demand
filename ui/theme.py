@@ -1392,6 +1392,29 @@ _CSS_TEMPLATE = '''
                 border: 1px solid %(studio_lavender_border)s;
                 background-color: %(studio_lavender_soft)s;
             }
+            .create-ai-activity-tools-quest {
+                border-radius: 14px;
+                border: 2px solid %(accent_violet)s;
+                background-color: %(studio_surface)s;
+                box-shadow: 0 2px 5px rgba(108, 86, 198, 0.12);
+            }
+            .create-ai-activity-tools-quest-progress {
+                border-radius: 999px;
+                background-color: %(violet_soft)s;
+                color: %(accent_violet)s;
+                padding: 3px 8px;
+                font-size: 10px;
+                font-weight: 700;
+            }
+            .create-ai-activity-tools-quest-title {
+                color: %(toolbar)s;
+                font-size: 16px;
+                font-weight: 700;
+            }
+            .create-ai-activity-tools-quest-body {
+                color: %(inactive_stroke)s;
+                font-size: 12px;
+            }
             .create-ai-activity-tools-card-title {
                 color: %(toolbar)s;
                 font-size: 14px;

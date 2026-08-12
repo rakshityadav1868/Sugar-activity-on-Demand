@@ -1299,12 +1299,22 @@ pump()
 assert panel._activity_tools_stack.get_visible_child_name() == 'understand'
 overview = panel._activity_tools_understand_overview.get_children()
 sections = panel._activity_tools_understand_sections.get_children()
-assert len(overview) >= 6, 'overview cards: %d' % len(overview)
+assert len(overview) == 2, 'overview cards: %d' % len(overview)
 understand_labels = all_label_text(
     panel._activity_tools_stack.get_child_by_name('understand'))
-for expected in ('How this activity works', '1 · Try it', '2 · Notice',
-                 '3 · Explain', '4 · Imagine', 'What did you discover?'):
+for expected in ('How this activity works', '1 · Try it',
+                 'What did you discover?'):
     assert expected in understand_labels, (expected, understand_labels)
+assert panel._activity_tools_reflection_step_progress.get_text() == '1 of 4'
+assert not panel._activity_tools_reflection_step_back.get_sensitive()
+for title in ('2 · Notice', '3 · Explain', '4 · Imagine'):
+    panel._activity_tools_reflection_step_next.clicked()
+    assert panel._activity_tools_reflection_step_title.get_text() == title
+assert panel._activity_tools_reflection_step_next.get_label() == \
+    'Write what you discovered ↓'
+panel._activity_tools_reflection_step_back.clicked()
+assert panel._activity_tools_reflection_step_title.get_text() == '3 · Explain'
+panel._activity_tools_reflection_step_next.clicked()
 assert len(sections) >= 5, 'code sections: %d' % len(sections)
 assert not panel._activity_tools_code_revealer.get_reveal_child()
 assert not panel._activity_tools_health_revealer.get_reveal_child()

@@ -482,6 +482,12 @@ class CreateAIActivityPanel(Gtk.EventBox):
         self._activity_tools_reflection_steps = []
         self._activity_tools_reflection_text = None
         self._activity_tools_reflection_prompt_label = None
+        self._activity_tools_reflection_step_index = 0
+        self._activity_tools_reflection_step_progress = None
+        self._activity_tools_reflection_step_title = None
+        self._activity_tools_reflection_step_body = None
+        self._activity_tools_reflection_step_back = None
+        self._activity_tools_reflection_step_next = None
         self._activity_tools_reflection_status = None
         self._activity_tools_reflection_notes = {}
         self._activity_tools_notes_box = None
@@ -5932,6 +5938,50 @@ class CreateAIActivityPanel(Gtk.EventBox):
         self._activity_tools_understand_sections = sections
         content.pack_start(overview, False, False, 0)
 
+        quest = Gtk.EventBox()
+        quest.get_style_context().add_class(
+            'create-ai-activity-tools-quest')
+        quest_box = Gtk.VBox(spacing=style.zoom(8))
+        quest_box.set_border_width(style.zoom(11))
+        quest.add(quest_box)
+        quest_top = Gtk.HBox(spacing=style.zoom(8))
+        quest_label = Gtk.Label(_('REFLECTION QUEST'))
+        quest_label.get_style_context().add_class('create-ai-meta-label')
+        quest_label.set_xalign(0)
+        quest_top.pack_start(quest_label, True, True, 0)
+        quest_progress = Gtk.Label('')
+        self._activity_tools_reflection_step_progress = quest_progress
+        quest_progress.get_style_context().add_class(
+            'create-ai-activity-tools-quest-progress')
+        quest_top.pack_end(quest_progress, False, False, 0)
+        quest_box.pack_start(quest_top, False, False, 0)
+        quest_title = Gtk.Label('')
+        self._activity_tools_reflection_step_title = quest_title
+        quest_title.get_style_context().add_class(
+            'create-ai-activity-tools-quest-title')
+        quest_title.set_xalign(0)
+        quest_box.pack_start(quest_title, False, False, 0)
+        quest_body = Gtk.Label('')
+        self._activity_tools_reflection_step_body = quest_body
+        quest_body.get_style_context().add_class(
+            'create-ai-activity-tools-quest-body')
+        quest_body.set_xalign(0)
+        quest_body.set_line_wrap(True)
+        quest_body.set_max_width_chars(35)
+        quest_box.pack_start(quest_body, False, False, 0)
+        quest_actions = Gtk.HBox(spacing=style.zoom(6))
+        quest_back = self._create_activity_tools_action_button(
+            _('Back'), self.__activity_tools_reflection_back_cb)
+        self._activity_tools_reflection_step_back = quest_back
+        quest_actions.pack_start(quest_back, False, False, 0)
+        quest_next = self._create_activity_tools_action_button(
+            _('Next'), self.__activity_tools_reflection_next_cb,
+            primary=True)
+        self._activity_tools_reflection_step_next = quest_next
+        quest_actions.pack_end(quest_next, False, False, 0)
+        quest_box.pack_start(quest_actions, False, False, 0)
+        content.pack_start(quest, False, False, style.zoom(2))
+
         reflection = Gtk.EventBox()
         reflection.get_style_context().add_class(
             'create-ai-activity-tools-reflection')
@@ -6329,14 +6379,7 @@ class CreateAIActivityPanel(Gtk.EventBox):
             _('How this activity works'),
             _activity_student_explanation(plan)), False, False, 0)
         reflection_prompts = _activity_reflection_prompts(plan)
-        for title, prompt in zip(
-                (_('1 · Try it'), _('2 · Notice'),
-                 _('3 · Explain'), _('4 · Imagine')),
-                reflection_prompts):
-            card = self._activity_tools_info_card(title, prompt)
-            card.get_style_context().add_class(
-                'create-ai-activity-tools-reflection-step')
-            overview.pack_start(card, False, False, 0)
+        self._set_activity_tools_reflection_step(reflection_prompts)
         if self._activity_tools_reflection_prompt_label is not None:
             self._activity_tools_reflection_prompt_label.set_text(
                 _('%s\n\nUse a starter below, or write your own thought.')
@@ -6420,6 +6463,48 @@ class CreateAIActivityPanel(Gtk.EventBox):
             self._activity_tools_health_box.show_all()
         if self._activity_tools_notes_box is not None:
             self._activity_tools_notes_box.show_all()
+
+    def _set_activity_tools_reflection_step(self, prompts=None):
+        result = self._generation_result
+        plan = result.plan if result is not None and \
+            isinstance(result.plan, dict) else {}
+        prompts = prompts or _activity_reflection_prompts(plan)
+        titles = (_('Try it'), _('Notice'), _('Explain'), _('Imagine'))
+        count = min(len(titles), len(prompts))
+        if not count:
+            return
+        index = max(0, min(
+            self._activity_tools_reflection_step_index, count - 1))
+        self._activity_tools_reflection_step_index = index
+        if self._activity_tools_reflection_step_progress is not None:
+            self._activity_tools_reflection_step_progress.set_text(
+                _('%(step)d of %(count)d') % {
+                    'step': index + 1, 'count': count})
+        if self._activity_tools_reflection_step_title is not None:
+            self._activity_tools_reflection_step_title.set_text(
+                '%d · %s' % (index + 1, titles[index]))
+        if self._activity_tools_reflection_step_body is not None:
+            self._activity_tools_reflection_step_body.set_text(
+                prompts[index])
+        if self._activity_tools_reflection_step_back is not None:
+            self._activity_tools_reflection_step_back.set_sensitive(index > 0)
+        if self._activity_tools_reflection_step_next is not None:
+            self._activity_tools_reflection_step_next.set_label(
+                _('Write what you discovered ↓')
+                if index == count - 1 else _('Next →'))
+
+    def __activity_tools_reflection_back_cb(self, button):
+        if self._activity_tools_reflection_step_index > 0:
+            self._activity_tools_reflection_step_index -= 1
+        self._set_activity_tools_reflection_step()
+
+    def __activity_tools_reflection_next_cb(self, button):
+        if self._activity_tools_reflection_step_index < 3:
+            self._activity_tools_reflection_step_index += 1
+            self._set_activity_tools_reflection_step()
+            return
+        if self._activity_tools_reflection_text is not None:
+            self._activity_tools_reflection_text.grab_focus()
 
     def __activity_tools_toggle_cb(self, button, section):
         revealer = (self._activity_tools_health_revealer
