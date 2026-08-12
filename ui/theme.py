@@ -233,14 +233,56 @@ _CSS_TEMPLATE = '''
                 font-size: 17px;
             }
             .create-ai-error-preview {
-                background-color: #fff7e6;
-                border: 1px solid #e6b800;
+                background-color: #fffbe6;
+                border: 1px solid #f59e0b;
                 border-radius: 14px;
+                padding: 20px;
+            }
+            .create-ai-error-preview .create-ai-generated-title {
+                color: #92400e;
+                font-weight: 700;
+                font-size: 17px;
+            }
+            .create-ai-error-preview .create-ai-meta-note {
+                color: #78350f;
+                font-size: 12px;
+                font-weight: 500;
+            }
+            .create-ai-error-preview .create-ai-generation-stage {
+                color: #92400e;
+                font-size: 11px;
+                font-family: monospace;
+                background-color: #ffffff;
+                padding: 8px 12px;
+                border-radius: 8px;
+                border: 1px solid #fde68a;
+                font-weight: 500;
             }
             .create-ai-error-generation {
-                background-color: #fdecea;
-                border: 1px solid #d93025;
+                background-color: #fef2f2;
+                border: 1px solid #ef4444;
                 border-radius: 14px;
+                padding: 20px;
+            }
+            .create-ai-error-generation .create-ai-generated-title {
+                color: #991b1b;
+                font-weight: 700;
+                font-size: 17px;
+            }
+            .create-ai-error-generation .create-ai-meta-note {
+                color: #7f1d1d;
+                font-size: 12px;
+                font-weight: 500;
+            }
+            .create-ai-error-generation .create-ai-generation-stage {
+                color: #991b1b;
+                font-size: 11px;
+                font-family: monospace;
+                background-color: #ffffff;
+                padding: 8px 12px;
+                border-radius: 8px;
+                border: 1px solid #fca5a5;
+                font-weight: 500;
             }
             .create-ai-generated-badge {
                 border-radius: 999px;
@@ -748,6 +790,35 @@ _CSS_TEMPLATE = '''
             button.create-ai-studio-button:hover {
                 background-color: %(studio_preview)s;
                 border-color: %(studio_edge)s;
+            }
+            button.create-ai-studio-button label {
+                color: %(toolbar)s;
+            }
+            button.create-ai-studio-button:hover label {
+                color: %(toolbar)s;
+            }
+            button.create-ai-studio-secondary {
+                border-radius: 999px;
+                border: 1px solid #374151;
+                background-image: none;
+                background-color: #ffffff;
+                color: #111827;
+                padding: 5px 15px;
+                font-size: 11px;
+                font-weight: 700;
+            }
+            button.create-ai-studio-secondary:hover {
+                background-color: #f3f4f6;
+                border-color: #111827;
+                color: #000000;
+            }
+            button.create-ai-studio-secondary label {
+                color: #111827;
+                font-weight: 700;
+            }
+            button.create-ai-studio-secondary:hover label {
+                color: #000000;
+                font-weight: 700;
             }
             button.create-ai-studio-primary {
                 border-radius: 999px;

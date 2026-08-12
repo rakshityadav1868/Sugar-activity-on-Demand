@@ -11127,7 +11127,7 @@ if clipboard.wait_is_text_available():
         resume.connect('clicked', lambda *_a: self._resume_repair(job_id))
         actions.pack_start(resume, False, False, 0)
         review = Gtk.Button.new_with_label(_('View draft code'))
-        review.set_relief(Gtk.ReliefStyle.NONE)
+        review.get_style_context().add_class('create-ai-studio-secondary')
         review.connect(
             'clicked', lambda *_a: self._select_studio_tab('review'))
         actions.pack_start(review, False, False, 0)
