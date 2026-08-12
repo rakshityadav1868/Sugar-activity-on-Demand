@@ -8423,7 +8423,9 @@ if clipboard.wait_is_text_available():
         error_box.pack_start(error_note, False, False, 0)
 
         if self._last_preview_error:
-            error_detail = Gtk.Label(self._last_preview_error[:220])
+            friendly_err = _format_user_friendly_error(
+                self._last_preview_error)
+            error_detail = Gtk.Label(friendly_err)
             error_detail.get_style_context().add_class(
                 'create-ai-generation-stage')
             error_detail.set_line_wrap(True)
@@ -8433,7 +8435,7 @@ if clipboard.wait_is_text_available():
             try:
                 self._append_chat_status(
                     _('Preview issue: %s')
-                    % self._last_preview_error[:160])
+                    % friendly_err)
             except Exception:
                 logging.exception('Could not post preview issue to chat')
 
@@ -11074,7 +11076,8 @@ if clipboard.wait_is_text_available():
                 self._preview_empty_title.set_text(
                     _('Could not generate activity'))
             if self._preview_empty_note is not None:
-                self._preview_empty_note.set_text(display_error)
+                self._preview_empty_note.set_text(
+                    _format_user_friendly_error(display_error))
         self._append_chat_status(
             _('Generation failed: %s') % display_error)
         self._set_chat_entry_sensitive(True)
@@ -11113,7 +11116,8 @@ if clipboard.wait_is_text_available():
         note.set_justify(Gtk.Justification.CENTER)
         box.pack_start(note, False, False, 0)
 
-        detail = Gtk.Label(str(error_text)[:220])
+        friendly_err = _format_user_friendly_error(error_text)
+        detail = Gtk.Label(friendly_err)
         detail.get_style_context().add_class('create-ai-generation-stage')
         detail.set_line_wrap(True)
         detail.set_max_width_chars(70)
@@ -12345,3 +12349,58 @@ def _clean_generation_error_text(error_text):
         if text.startswith(prefix):
             text = text[len(prefix):].strip()
     return text
+
+
+def _format_user_friendly_error(error_text):
+    """Format raw pipeline/preview errors into human-friendly explanations
+    describing what went wrong so the learner understands the issue clearly.
+    """
+    cleaned = _clean_generation_error_text(error_text)
+    if not cleaned:
+        return _('What went wrong: An unknown issue occurred during processing.')
+
+    text_lower = cleaned.lower()
+
+    if any(k in text_lower for k in (
+            'attempt_limit_reached', 'validation still failed',
+            'could not repair')):
+        return _(
+            'What went wrong: The AI generated draft code, but could not '
+            'automatically pass all validation checks after several retries.'
+        )
+
+    if any(k in text_lower for k in (
+            'syntaxerror', 'invalid syntax', 'indentationerror')):
+        return _(
+            'What went wrong: The generated Python code has a syntax '
+            'error. You can review the code in the Review tab or try refining.'
+        )
+
+    if any(k in text_lower for k in (
+            'nameerror', 'is not defined', 'importerror',
+            'modulenotfounderror', 'attributeerror')):
+        return _(
+            'What went wrong: The activity code refers to a missing '
+            'variable, function, or library.'
+        )
+
+    if any(k in text_lower for k in (
+            'api key', 'unauthorized', 'quota', 'rate limit', '401', '403',
+            'connection refused', 'timeout')):
+        return _(
+            'What went wrong: Could not connect to the AI model provider. '
+            'Please check your API key or network connection.'
+        )
+
+    if any(k in text_lower for k in (
+            'drawingarea', 'cairo', 'canvas', 'zerodivisionerror',
+            'typeerror', 'valueerror')):
+        return _(
+            'What went wrong: A runtime issue occurred while rendering the '
+            'activity preview.'
+        )
+
+    first_line = cleaned.split('\n')[0]
+    if len(first_line) > 160:
+        first_line = first_line[:157].rstrip() + '...'
+    return _('What went wrong: %s') % first_line
