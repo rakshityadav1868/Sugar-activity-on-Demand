@@ -153,6 +153,36 @@ class TestStudioDecoupling(unittest.TestCase):
                          _clean_generation_error_text('plain message'))
         self.assertEqual('', _clean_generation_error_text(None))
 
+    def test_format_user_friendly_error(self):
+        from ui.panel import _format_user_friendly_error
+
+        self.assertIn(
+            'What went wrong:',
+            _format_user_friendly_error(
+                'Provider could not repair activity code: '
+                'attempt_limit_reached: validation still failed'))
+
+        self.assertIn(
+            'automatically pass all validation checks',
+            _format_user_friendly_error('attempt_limit_reached'))
+
+        self.assertIn(
+            'syntax error',
+            _format_user_friendly_error('SyntaxError: invalid syntax'))
+
+        self.assertIn(
+            'missing variable, function, or library',
+            _format_user_friendly_error("NameError: name 'foo' is not defined"))
+
+        self.assertIn(
+            'AI model provider',
+            _format_user_friendly_error('HTTP 401 Unauthorized API key error'))
+
+        self.assertIn(
+            'What went wrong: Custom error message',
+            _format_user_friendly_error('Custom error message'))
+
+
     def test_refinement_prompt_respects_backend_limit(self):
         from core.spec import MAX_PROMPT_LENGTH
         from ui.panel import CreateAIActivityPanel
