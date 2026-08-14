@@ -7395,7 +7395,7 @@ class CreateAIActivityPanel(Gtk.EventBox):
                 False,
                 provider.label,
                 provider.model,
-                self._redact_provider_error_text(error, provider),
+                self._format_user_friendly_provider_error(error, provider),
             )
 
     def _provider_test_finished_cb(self, passed, label, model, message):
@@ -7414,6 +7414,31 @@ class CreateAIActivityPanel(Gtk.EventBox):
             if self._prompt_status_label is not None:
                 self._prompt_status_label.set_text(_('Model failed'))
         return False
+
+    def _format_user_friendly_provider_error(self, error, provider):
+        raw_text = self._redact_provider_error_text(error, provider)
+        text_lower = raw_text.lower()
+
+        if any(term in text_lower for term in (
+                '401', 'unauthorized', 'invalid api key', 'api_key_invalid',
+                'invalid_api_key', 'authentication failed', 'incorrect api key')):
+            return _('Invalid API key. Please check your key and try again.')
+        if any(term in text_lower for term in (
+                '429', '402', 'quota', 'rate limit', 'rate_limit',
+                'resource_exhausted', 'insufficient_quota')):
+            return _('API quota or rate limit exceeded. Please check your provider account.')
+        if any(term in text_lower for term in (
+                '403', 'forbidden', 'access denied', 'permission denied')):
+            return _('Access denied. Please check your key permissions.')
+        if any(term in text_lower for term in (
+                '404', 'not found', 'model_not_found')):
+            return _('Model not found or not supported by your API key.')
+        if any(term in text_lower for term in (
+                'connection', 'connect', 'timeout', 'network', 'unreachable',
+                'name or service not known', 'temporary failure')):
+            return _('Network error. Could not connect to provider.')
+
+        return raw_text
 
     def _redact_provider_error_text(self, error, provider):
         text = str(error)
@@ -10131,11 +10156,7 @@ if clipboard.wait_is_text_available():
     def __provider_apply_clicked_cb(self, button):
         provider = self._configure_selected_provider(persist=True)
         if provider is not True and provider:
-            if self._provider_status_label is not None:
-                self._provider_status_label.set_text(
-                    _('Provider saved. Ready to generate activities.'))
-            if self._prompt_status_label is not None:
-                self._prompt_status_label.set_text(_('Ready to generate'))
+            self._start_provider_test(provider)
 
     def __provider_paste_clicked_cb(self, button):
         self._paste_provider_key_from_clipboard()
@@ -10160,6 +10181,9 @@ if clipboard.wait_is_text_available():
                 self._provider_status_label.set_text(_('Pasting API key...'))
             GObject.idle_add(self.__provider_key_entry_paste_finished_cb)
             return False
+        if event.keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter):
+            self.__provider_apply_clicked_cb(None)
+            return True
         return False
 
     def __provider_remove_clicked_cb(self, button):
