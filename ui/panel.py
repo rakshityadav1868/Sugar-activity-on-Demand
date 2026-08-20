@@ -453,6 +453,9 @@ class CreateAIActivityPanel(Gtk.EventBox):
         self._chat_messages_box = None
         self._chat_entry = None
         self._chat_scroll = None
+        self._chat_suggestions = None
+        self._chat_suggestions_flow = None
+        self._chat_suggestion_buttons = []
         self._aod_session_id = ''
         self._aod_active_revision_id = ''
         self._aod_original_prompt = ''
@@ -590,6 +593,7 @@ class CreateAIActivityPanel(Gtk.EventBox):
         self._aod_active_revision_id = ''
         self._aod_original_prompt = ''
         self._show_empty_activity_preview()
+        self._refresh_refinement_suggestions()
         self._go_home()
         self._reset_prompt()
 
@@ -2633,6 +2637,32 @@ class CreateAIActivityPanel(Gtk.EventBox):
         ]
         for message, from_user in chat_messages:
             self._append_chat_message(message, from_user, scroll=False)
+
+        suggestions = Gtk.VBox(spacing=style.zoom(6))
+        self._chat_suggestions = suggestions
+        suggestions.set_no_show_all(True)
+        box.pack_start(suggestions, False, False, 0)
+
+        suggestions_label = Gtk.Label(
+            _('Suggested refinements — choose one, edit it, then Send'))
+        suggestions_label.set_xalign(0)
+        suggestions_label.set_line_wrap(True)
+        suggestions_label.get_style_context().add_class(
+            'create-ai-refinement-suggestions-label')
+        suggestions.pack_start(suggestions_label, False, False, 0)
+        suggestions_label.show()
+
+        suggestions_flow = Gtk.FlowBox()
+        self._chat_suggestions_flow = suggestions_flow
+        suggestions_flow.set_selection_mode(Gtk.SelectionMode.NONE)
+        suggestions_flow.set_homogeneous(False)
+        suggestions_flow.set_min_children_per_line(1)
+        suggestions_flow.set_max_children_per_line(2)
+        suggestions_flow.set_column_spacing(style.zoom(6))
+        suggestions_flow.set_row_spacing(style.zoom(6))
+        suggestions.pack_start(suggestions_flow, False, False, 0)
+        suggestions_flow.show()
+        suggestions.hide()
 
         composer = Gtk.EventBox()
         composer.get_style_context().add_class('create-ai-chat-composer')
@@ -10682,6 +10712,56 @@ if clipboard.wait_is_text_available():
                     _('Ask for a refinement...'))
                 if self._stack.get_visible_child_name() == 'studio':
                     self._chat_entry.grab_focus()
+        if sensitive:
+            self._refresh_refinement_suggestions()
+        elif self._chat_suggestions is not None:
+            self._chat_suggestions.hide()
+
+    def _refresh_refinement_suggestions(self):
+        """Offer quick, editable follow-up prompts for the accepted result."""
+        suggestions = self._chat_suggestions
+        flow = self._chat_suggestions_flow
+        result = self._generation_result
+        if suggestions is None or flow is None:
+            return
+        if result is None or self._has_active_generation_job():
+            suggestions.hide()
+            return
+
+        result_plan = getattr(result, 'plan', {})
+        plan = result_plan if isinstance(result_plan, dict) else {}
+        files = getattr(result, 'files', {})
+        source = (files.get('activity.py', '')
+                  if isinstance(files, dict) else '')
+        presets = _activity_tools_presets(plan, source)[:4]
+        labels = [label for label, unused_prompt in presets]
+        current_labels = [button.get_label()
+                          for button in self._chat_suggestion_buttons]
+        if labels != current_labels:
+            self._clear_box(flow)
+            self._chat_suggestion_buttons = []
+            for label, prompt in presets:
+                button = Gtk.Button.new_with_label(label)
+                button.set_relief(Gtk.ReliefStyle.NONE)
+                button.get_style_context().add_class(
+                    'create-ai-refinement-suggestion')
+                button.set_tooltip_text(prompt)
+                button.get_accessible().set_description(prompt)
+                button.connect(
+                    'clicked', self.__refinement_suggestion_clicked_cb,
+                    prompt)
+                flow.add(button)
+                button.show()
+                self._chat_suggestion_buttons.append(button)
+        suggestions.show()
+
+    def __refinement_suggestion_clicked_cb(self, button, prompt):
+        """Put a suggested refinement in the composer so it stays editable."""
+        if self._chat_entry is None or self._generation_result is None:
+            return
+        self._chat_entry.set_text(prompt)
+        self._chat_entry.set_position(-1)
+        self._chat_entry.grab_focus()
 
     def _has_active_generation_job(self):
         if self._generation_job_id is None:

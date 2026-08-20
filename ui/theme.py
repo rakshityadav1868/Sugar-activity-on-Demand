@@ -722,6 +722,27 @@ _CSS_TEMPLATE = '''
                 font-size: 11px;
                 padding: 2px 4px;
             }
+            .create-ai-refinement-suggestions-label {
+                color: %(inactive_stroke)s;
+                font-size: 10px;
+                font-weight: 600;
+            }
+            button.create-ai-refinement-suggestion {
+                border-radius: 999px;
+                border: 1px solid %(teal_border)s;
+                background-image: none;
+                background-color: %(teal_soft)s;
+                color: %(teal_text)s;
+                padding: 5px 10px;
+                font-size: 10px;
+                font-weight: 700;
+            }
+            button.create-ai-refinement-suggestion label {
+                color: %(teal_text)s;
+            }
+            button.create-ai-refinement-suggestion:hover {
+                background-color: %(studio_preview)s;
+            }
             .create-ai-chat-composer {
                 border-radius: 15px;
                 border: 1px solid %(studio_edge)s;

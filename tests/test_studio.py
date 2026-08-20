@@ -423,6 +423,7 @@ import json
 import os
 import tempfile
 import time
+from types import SimpleNamespace
 
 sugar_home = tempfile.mkdtemp(prefix='aod-studio-home-test-')
 os.environ['SUGAR_HOME'] = sugar_home
@@ -569,6 +570,27 @@ pump()
 assert len(panel._home_ring_icons) == 1
 assert panel._home_ring.get_visible()
 assert not panel._home_empty_box.get_visible()
+
+# A completed activity exposes activity-aware refinement suggestions beside
+# the refinement textbox. Choosing one fills the textbox without immediately
+# submitting it, so the learner can edit the proposed request first.
+panel._generation_result = SimpleNamespace(
+    plan={'template': 'game', 'summary': 'A scored obstacle race'},
+    files={'activity.py': 'def move_with_arrow_keys(): pass'},
+)
+panel._refresh_refinement_suggestions()
+pump()
+assert panel._chat_suggestions.get_visible()
+suggestion_labels = [button.get_label()
+                     for button in panel._chat_suggestion_buttons]
+assert 'Adjust challenge' in suggestion_labels
+assert 'Improve controls' not in suggestion_labels  # only four concise chips
+first_suggestion = panel._chat_suggestion_buttons[0]
+assert panel._chat_entry.get_text() == ''
+first_suggestion.emit('clicked')
+pump()
+assert panel._chat_entry.get_text()
+assert 'engaging and fair' in panel._chat_entry.get_text()
 
 # Destroy the panel first: see the note in _OFFSCREEN_SCRIPT above.
 panel.destroy()
