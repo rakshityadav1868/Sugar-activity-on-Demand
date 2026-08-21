@@ -38,7 +38,6 @@ import re
 import shutil
 import glob
 import subprocess
-import tempfile
 import threading
 import time
 from gettext import gettext as _
@@ -1324,23 +1323,6 @@ class CreateAIActivityPanel(Gtk.EventBox):
                 context.remove_class('create-ai-option-card-active')
         self._update_template_card_icons()
 
-    def __enhance_chip_toggled_cb(self, button):
-        active = button.get_active()
-        self._selected_options['enhance'] = 'on' if active else 'off'
-        if self._enhance_chip_value_label is not None:
-            self._enhance_chip_value_label.set_text(
-                _('Auto') if active else _('Off'))
-        if active:
-            button.get_style_context().add_class(
-                'create-ai-prompt-chip-active')
-        else:
-            button.get_style_context().remove_class(
-                'create-ai-prompt-chip-active')
-        if self._prompt_status_label is not None:
-            self._prompt_status_label.set_text(
-                _('Short prompts will be auto-enhanced') if active
-                else _('Prompts are sent exactly as written'))
-
     def __enhance_button_clicked_cb(self, button):
         self._start_prompt_enhancement()
 
@@ -2216,13 +2198,6 @@ class CreateAIActivityPanel(Gtk.EventBox):
             already_enhanced=bool(state.get('auto_enhanced')),
         )
 
-    def _create_section_label(self, text):
-        label = Gtk.Label(text)
-        label.get_style_context().add_class('create-ai-section-label')
-        label.set_halign(Gtk.Align.CENTER)
-        label.show()
-        return label
-
     def _create_provider_selector(self):
         selector = Gtk.VBox(spacing=style.zoom(9))
         selector.set_border_width(style.zoom(14))
@@ -2439,39 +2414,6 @@ class CreateAIActivityPanel(Gtk.EventBox):
             if option['value'] == selected:
                 return option
         return self._get_license_options()[0]
-
-    def _create_option_group(self, title, group_name, options, active_value,
-                             card_width=142, card_height=76,
-                             detail_width=15):
-        group = Gtk.VBox(spacing=style.zoom(4))
-        group.set_halign(Gtk.Align.CENTER)
-
-        label = Gtk.Label(title)
-        label.get_style_context().add_class('create-ai-option-heading')
-        label.set_halign(Gtk.Align.CENTER)
-        group.pack_start(label, False, False, 0)
-        if title:
-            label.show()
-
-        row = Gtk.HBox(spacing=style.zoom(7))
-        row.set_halign(Gtk.Align.CENTER)
-        group.pack_start(row, False, False, 0)
-        row.show()
-
-        self._option_buttons[group_name] = []
-        self._selected_options[group_name] = active_value
-        for value, option_title, option_detail in options:
-            button = self._create_option_card(
-                group_name, value, option_title, option_detail,
-                card_width, card_height, detail_width)
-            if value == active_value:
-                button.get_style_context().add_class(
-                    'create-ai-option-card-active')
-            row.pack_start(button, False, False, 0)
-            button.show()
-
-        group.show()
-        return group
 
     def _create_option_card(self, group_name, value, title, detail,
                             card_width=142, card_height=76,
@@ -4888,88 +4830,6 @@ class CreateAIActivityPanel(Gtk.EventBox):
             .replace('\t', '&#160;&#160;&#160;&#160;') \
             .replace(' ', '&#160;')
 
-    def _create_live_edit_panel(self):
-        panel = Gtk.EventBox()
-        panel.get_style_context().add_class('create-ai-live-edit-panel')
-        panel.set_size_request(-1, style.zoom(164))
-
-        box = Gtk.VBox(spacing=style.zoom(8))
-        box.set_border_width(style.zoom(12))
-        panel.add(box)
-        box.show()
-
-        header = Gtk.HBox(spacing=style.zoom(8))
-        box.pack_start(header, False, False, 0)
-        header.show()
-
-        title = Gtk.Label(_('Live Edit Mode'))
-        title.get_style_context().add_class('create-ai-studio-section-title')
-        title.set_xalign(0)
-        header.pack_start(title, True, True, 0)
-        title.show()
-
-        toggle = Gtk.HBox(spacing=0)
-        toggle.get_style_context().add_class('create-ai-live-toggle-group')
-        header.pack_start(toggle, False, False, 0)
-        toggle.show()
-
-        self._live_edit_on_button = self._create_live_toggle_button(
-            _('On'), True)
-        self._live_edit_off_button = self._create_live_toggle_button(
-            _('Off'), False)
-        toggle.pack_start(self._live_edit_on_button, False, False, 0)
-        toggle.pack_start(self._live_edit_off_button, False, False, 0)
-
-        description = Gtk.Label(
-            _('Turn on, then click a part or drag across an area of the '
-              'preview to target it.'))
-        description.get_style_context().add_class('create-ai-meta-note')
-        description.set_xalign(0)
-        description.set_line_wrap(True)
-        box.pack_start(description, False, False, 0)
-        description.show()
-
-        self._live_edit_target_label = Gtk.Label()
-        self._live_edit_target_label.get_style_context().add_class(
-            'create-ai-live-target')
-        self._live_edit_target_label.set_xalign(0)
-        self._live_edit_target_label.set_size_request(-1, style.zoom(34))
-        box.pack_start(self._live_edit_target_label, False, False, 0)
-        self._live_edit_target_label.show()
-        self._set_live_edit_target(_('activity canvas'))
-
-        row = Gtk.HBox(spacing=style.zoom(10))
-        box.pack_start(row, False, False, 0)
-        row.show()
-
-        self._live_edit_entry = Gtk.Entry()
-        self._live_edit_entry.set_placeholder_text(
-            _('Describe a preview change...'))
-        self._live_edit_entry.get_style_context().add_class(
-            'create-ai-live-entry')
-        self._live_edit_entry.connect(
-            'activate', self.__live_edit_entry_activate_cb)
-        self._live_edit_entry.set_size_request(-1, style.zoom(44))
-        row.pack_start(self._live_edit_entry, True, True, 0)
-        self._live_edit_entry.show()
-
-        add_button = Gtk.Button.new_with_label(_('Apply Change'))
-        add_button.get_style_context().add_class('create-ai-preview-change')
-        add_button.connect('clicked', self.__live_edit_add_clicked_cb)
-        add_button.set_size_request(style.zoom(170), style.zoom(44))
-        row.pack_start(add_button, False, False, 0)
-        add_button.show()
-
-        self._live_edit_status_label = Gtk.Label(_('Ready for preview edits'))
-        self._live_edit_status_label.get_style_context().add_class(
-            'create-ai-meta-note')
-        self._live_edit_status_label.set_xalign(0)
-        box.pack_start(self._live_edit_status_label, False, False, 0)
-        self._live_edit_status_label.show()
-
-        panel.show()
-        return panel
-
     def _create_ask_bar(self):
         bar = Gtk.EventBox()
         bar.get_style_context().add_class('create-ai-ask-bar')
@@ -5799,20 +5659,6 @@ class CreateAIActivityPanel(Gtk.EventBox):
         box.pack_start(label, False, False, 0)
         box.show_all()
         return box
-
-    def _create_activity_tools_tool_button(self, icon_name, tooltip,
-                                           on_toolbar=False):
-        """Build a Sugar ToolButton with a guaranteed Sugar SVG icon."""
-        button = ToolButton(tooltip=tooltip)
-        color = style.COLOR_WHITE if on_toolbar else style.COLOR_TOOLBAR_GREY
-        icon = Icon(
-            pixel_size=style.STANDARD_ICON_SIZE,
-            stroke_color=color.get_svg(),
-            fill_color=color.get_svg(),
-            **_sugar_action_icon_kwargs(icon_name))
-        icon.show()
-        button.set_icon_widget(icon)
-        return button
 
     def _create_activity_tools_action_button(self, label, callback=None,
                                              primary=False):
@@ -6718,67 +6564,6 @@ class CreateAIActivityPanel(Gtk.EventBox):
             Gdk.Screen.get_default(), css_provider,
             Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
         CreateAIActivityPanel._css_loaded = True
-
-    def _create_chrome_button(self, icon_name):
-        button = Gtk.Button()
-        button.set_relief(Gtk.ReliefStyle.NONE)
-        button.get_style_context().add_class('create-ai-overlay-button')
-        button.set_image(Icon(icon_name=icon_name,
-                              pixel_size=style.SMALL_ICON_SIZE))
-        return button
-
-    def _create_stage_card(self, title, details, footer, on_click=None):
-        column = Gtk.VBox(spacing=style.zoom(16))
-
-        card = Gtk.EventBox()
-        card.get_style_context().add_class('create-ai-stage-card')
-        card.set_visible_window(True)
-        card.set_above_child(True)
-        card.add_events(Gdk.EventMask.ENTER_NOTIFY_MASK |
-                        Gdk.EventMask.LEAVE_NOTIFY_MASK |
-                        Gdk.EventMask.BUTTON_RELEASE_MASK)
-        card.connect('enter-notify-event', self.__stage_card_enter_notify_cb)
-        card.connect('leave-notify-event', self.__stage_card_leave_notify_cb)
-        if on_click is not None:
-            card.connect('button-release-event',
-                         self.__stage_card_button_release_cb, on_click)
-        card.set_size_request(style.zoom(350), style.zoom(285))
-        column.pack_start(card, False, False, 0)
-        card.show()
-
-        card_box = Gtk.VBox(spacing=style.DEFAULT_PADDING)
-        card_box.set_border_width(style.zoom(24))
-        card.add(card_box)
-        card_box.show()
-
-        title_label = Gtk.Label()
-        title_label.get_style_context().add_class('create-ai-stage-title')
-        stage_text = style.COLOR_TOOLBAR_GREY.get_html()
-        title_label.set_markup(
-            '<span size="x-large" weight="bold" foreground="%s">%s</span>'
-            % (stage_text, title))
-        title_label.set_justify(Gtk.Justification.CENTER)
-        card_box.pack_start(title_label, False, False, style.zoom(4))
-        title_label.show()
-
-        details_label = Gtk.Label()
-        details_label.get_style_context().add_class('create-ai-stage-details')
-        details_label.set_markup('<span foreground="%s">%s</span>' %
-                                 (stage_text, details))
-        details_label.set_justify(Gtk.Justification.CENTER)
-        details_label.set_max_width_chars(24)
-        details_label.set_line_wrap(True)
-        card_box.pack_start(details_label, True, True, 0)
-        details_label.show()
-
-        footer_label = Gtk.Label(footer)
-        footer_label.get_style_context().add_class('create-ai-stage-footer')
-        footer_label.set_justify(Gtk.Justification.CENTER)
-        column.pack_start(footer_label, False, False, style.zoom(6))
-        footer_label.show()
-
-        column.show()
-        return column
 
     def _reset_prompt(self):
         if self._prompt_text is not None:
@@ -8592,33 +8377,6 @@ if clipboard.wait_is_text_available():
         if parent is not None:
             parent.remove(widget)
 
-    def _create_generated_preview_body(self, result, template):
-        plan = result.plan if isinstance(result.plan, dict) else {}
-        source = self._get_generated_activity_source(result)
-        if self._source_mentions_turn_drawing_canvas(source):
-            return self._create_turn_drawing_activity_preview(plan, source)
-        if self._source_mentions_paired_canvas(source):
-            return self._create_paired_canvas_activity_preview(plan, source)
-        if self._source_mentions_canvas(source) and template == 'utility':
-            return self._create_canvas_activity_preview(plan, source)
-        if template == 'quiz':
-            return self._create_quiz_activity_preview(plan)
-        if template == 'carrom':
-            return self._create_carrom_activity_preview(plan)
-        if template == 'chess':
-            return self._create_chess_activity_preview(plan)
-        if template == 'grid':
-            return self._create_grid_activity_preview(plan)
-        if template == 'canvas':
-            if (self._is_paired_canvas_activity(plan) or
-                    self._source_mentions_paired_canvas(source)):
-                return self._create_paired_canvas_activity_preview(
-                    plan, source)
-            return self._create_canvas_activity_preview(plan, source)
-        if template == 'narrative':
-            return self._create_narrative_activity_preview(plan, result)
-        return self._create_utility_activity_preview(plan, result)
-
     def _create_quiz_activity_preview(self, plan):
         box = Gtk.VBox(spacing=style.zoom(8))
         box.get_style_context().add_class('create-ai-generated-body')
@@ -10078,19 +9836,6 @@ if clipboard.wait_is_text_available():
         }
         return stage_indexes.get(stage, 0)
 
-    def __expand_button_clicked_cb(self, button):
-        window = self.get_toplevel()
-        if not isinstance(window, Gtk.Window):
-            return
-
-        if self._is_fullscreen:
-            window.unfullscreen()
-            self._is_fullscreen = False
-        else:
-            window.fullscreen()
-            window.present()
-            self._is_fullscreen = True
-
     def __option_card_clicked_cb(self, clicked_button, group_name, value):
         if group_name == 'template':
             selected = self._selected_learning_areas()
@@ -10295,9 +10040,6 @@ if clipboard.wait_is_text_available():
         else:
             self._prompt_char_label.set_text('')
 
-    def __prompt_entry_activate_cb(self, entry):
-        self.__send_button_clicked_cb(entry)
-
     def __prompt_button_press_event_cb(self, text_view, event):
         self._clear_prompt_placeholder()
         text_view.grab_focus()
@@ -10349,15 +10091,6 @@ if clipboard.wait_is_text_available():
         text_buffer.insert(insert_iter, text)
         if self._prompt_status_label is not None:
             self._prompt_status_label.set_text(_('Ready'))
-
-    def __prompt_focus_in_event_cb(self, text_view, event):
-        self._clear_prompt_placeholder()
-        return False
-
-    def __prompt_focus_out_event_cb(self, text_view, event):
-        if not self._get_prompt_text():
-            self._set_prompt_placeholder()
-        return False
 
     def __prompt_example_clicked_cb(self, button):
         self._set_prompt_text(
@@ -10494,40 +10227,6 @@ if clipboard.wait_is_text_available():
             plan.get('learner_goal', ''),
             code_size=self._selected_options.get('code_size', 'standard'),
         )
-
-    def _compact_plan_for_refinement(self, plan):
-        if not isinstance(plan, dict):
-            return '{}'
-        keys = (
-            'template',
-            'activity_kind',
-            'summary',
-            'learner_goal',
-            'learner_steps',
-            'interaction_model',
-            'ui_regions',
-            'state_schema',
-            'features',
-            'classroom_flow',
-        )
-        compact = {
-            key: plan[key]
-            for key in keys
-            if key in plan
-        }
-        text = json.dumps(compact, indent=2, sort_keys=True)
-        if len(text) <= 2200:
-            return text
-        return text[:2100].rstrip() + '\n...'
-
-    def _source_context_for_refinement(self, result):
-        files = getattr(result, 'files', {})
-        if not isinstance(files, dict):
-            return '# Current source is unavailable.'
-        source = files.get('activity.py', '').strip()
-        if not source:
-            return '# Current source is unavailable.'
-        return self._compact_source_for_refinement(source)
 
     def _compact_source_for_refinement(self, source):
         if len(source) <= 6500:
@@ -11342,12 +11041,6 @@ if clipboard.wait_is_text_available():
             if self._inner_paned.get_position() != width:
                 self._inner_paned.set_position(width)
         return False
-
-    def _sidebar_open_position(self):
-        # Retained for callers/tests that inspect the former paned geometry.
-        # Activity Tools itself is now an overlay and does not use this value.
-        width = self._inner_paned.get_allocated_width()
-        return width
 
     def _animate_paned(self, paned, target, done=None):
         if paned is None:
@@ -12410,9 +12103,6 @@ if clipboard.wait_is_text_available():
 
         self._apply_generation_result(result, announce=False)
         self._append_chat_status(_('Reopened from your activities'))
-
-    def __close_button_clicked_cb(self, button):
-        self.emit('close-requested')
 
     def __focus_prompt_text(self):
         if self._prompt_text is not None and \

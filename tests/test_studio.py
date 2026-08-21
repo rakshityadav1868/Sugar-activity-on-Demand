@@ -48,6 +48,30 @@ def _gtk_display_available():
     return completed.returncode == 0
 
 
+class _StatusLabel:
+    """Minimal stand-in for the GTK labels the provider callbacks write to."""
+
+    def __init__(self):
+        self.text = ''
+
+    def set_text(self, text):
+        self.text = text
+
+
+def _provider_apply_panel(**overrides):
+    """Panel stub for __provider_apply_clicked_cb, without a display."""
+    from types import SimpleNamespace
+
+    panel = SimpleNamespace(
+        _provider_test_running=False,
+        _provider_status_label=_StatusLabel(),
+        _prompt_status_label=_StatusLabel(),
+    )
+    for name, value in overrides.items():
+        setattr(panel, name, value)
+    return panel
+
+
 class TestStudioDecoupling(unittest.TestCase):
 
     def test_activity_tools_presets_follow_activity_capabilities(self):
@@ -217,6 +241,73 @@ class TestStudioDecoupling(unittest.TestCase):
         self.assertEqual('Make the arrow keys responsive.', spec.prompt)
         self.assertNotIn('Original long swimming request', spec.prompt)
         self.assertNotIn('Old summary', spec.prompt)
+
+    def test_provider_apply_starts_model_test_for_cloud_provider(self):
+        import threading
+        import types
+        from types import SimpleNamespace
+
+        from ui.panel import CreateAIActivityPanel
+
+        provider = SimpleNamespace(label='OpenRouter', model='test-model')
+        tested = []
+        finished = threading.Event()
+
+        def worker(test_provider):
+            tested.append(test_provider)
+            finished.set()
+
+        panel = _provider_apply_panel(
+            _configure_selected_provider=lambda persist: provider,
+            _provider_test_worker=worker)
+        panel._start_provider_test = types.MethodType(
+            CreateAIActivityPanel._start_provider_test, panel)
+
+        CreateAIActivityPanel.\
+            _CreateAIActivityPanel__provider_apply_clicked_cb(panel, None)
+
+        self.assertTrue(finished.wait(timeout=5))
+        self.assertEqual([provider], tested)
+        self.assertTrue(panel._provider_test_running)
+        self.assertIn('OpenRouter', panel._provider_status_label.text)
+        self.assertEqual('Testing model', panel._prompt_status_label.text)
+
+    def test_provider_apply_skips_model_test_when_no_key_needed(self):
+        import types
+        from types import SimpleNamespace
+
+        from ui.panel import CreateAIActivityPanel
+
+        tested = []
+        panel = _provider_apply_panel(
+            _configure_selected_provider=lambda persist: True,
+            _provider_test_worker=tested.append)
+        panel._start_provider_test = types.MethodType(
+            CreateAIActivityPanel._start_provider_test, panel)
+
+        CreateAIActivityPanel.\
+            _CreateAIActivityPanel__provider_apply_clicked_cb(panel, None)
+
+        self.assertEqual([], tested)
+        self.assertFalse(panel._provider_test_running)
+
+    def test_provider_apply_skips_model_test_when_setup_failed(self):
+        import types
+
+        from ui.panel import CreateAIActivityPanel
+
+        tested = []
+        panel = _provider_apply_panel(
+            _configure_selected_provider=lambda persist: False,
+            _provider_test_worker=tested.append)
+        panel._start_provider_test = types.MethodType(
+            CreateAIActivityPanel._start_provider_test, panel)
+
+        CreateAIActivityPanel.\
+            _CreateAIActivityPanel__provider_apply_clicked_cb(panel, None)
+
+        self.assertEqual([], tested)
+        self.assertFalse(panel._provider_test_running)
 
     def test_auto_reference_provider_falls_back_to_configured_vision(self):
         from types import SimpleNamespace
