@@ -1,0 +1,104 @@
+---
+title: Documentation Workflow
+description: Maintain the Fumadocs site, navigation, content style, AI-readable outputs, and deployment checks.
+---
+
+## Source of truth
+
+Documentation pages live in:
+
+```text
+website/content/docs/
+```
+
+Each `.mdx` page needs YAML frontmatter:
+
+```mdx
+---
+title: Page title
+description: One-sentence summary used by navigation and metadata.
+---
+```
+
+The file path determines the URL. `index.mdx` maps to its directory route.
+Folder and page ordering is explicit in each `meta.json`; a page omitted from a
+`pages` array is intentionally absent from that navigation tree.
+
+## Local preview
+
+Node.js 22 or newer is required by the current Fumadocs toolchain.
+
+```sh
+cd website
+npm install
+npm run dev
+```
+
+Open [http://localhost:3000/docs](http://localhost:3000/docs) and test
+desktop/mobile navigation, search,
+heading anchors, internal links, code blocks, and light/dark themes.
+
+## Authoring conventions
+
+- Write for the reader's task first, then name implementation files.
+- State invariants and failure behavior, not only the happy path.
+- Use repository-relative module paths in code formatting.
+- Keep commands copyable from the repository root unless the text changes
+  directory explicitly.
+- Link to another docs page with a relative URL.
+- Do not copy source comments wholesale; summarize behavior and point readers
+  to the owning module.
+- Avoid secrets, personal paths, ephemeral job IDs, and generated private data
+  in examples.
+- Update the configuration table when adding an environment variable.
+- Update the generated project contract when changing files or plan fields.
+- Update architecture/data flow when ownership or sequencing changes.
+
+Fumadocs provides tables of contents, syntax highlighting, callouts, search,
+and automatic relative-link handling. Prefer normal Markdown unless an MDX
+component materially improves comprehension.
+
+## AI-readable documentation
+
+The site enables processed Markdown in the content source and exposes:
+
+| Route | Purpose |
+| --- | --- |
+| `/llms.txt` | page index for language-model tools |
+| `/llms-full.txt` | concatenated processed documentation |
+| `/docs/<path>.md` | Markdown representation of one page |
+| `Accept: text/markdown` on `/docs/...` | content-negotiated Markdown representation |
+
+The per-page toolbar also offers copy/view actions. Keep headings descriptive
+and avoid hiding essential information only inside visual components so these
+representations remain useful.
+
+## Validate before review
+
+```sh
+cd website
+npm run lint
+npm run typecheck
+npm run build
+```
+
+Then review the diff for accidental dependency churn and confirm new pages are
+listed in their `meta.json`.
+
+## Deployment
+
+The site is a standard Next.js application. A host should run `npm ci`,
+`npm run build`, and `npm start`, or use a Next.js-aware platform. Keep
+`next.config.mjs` and the content directory available during builds because
+Fumadocs MDX compiles the local source.
+
+When adding CI deployment, pin Node.js 22+, use the committed lockfile, run the
+same lint/type/build checks, and configure the canonical site URL in metadata
+with `NEXT_PUBLIC_SITE_URL` once a production hostname exists.
+
+## Keep concise repository entry points
+
+`README.md` remains the fast product/setup overview and `CONTRIBUTING.md`
+remains a short link hub. Avoid duplicating every detailed section there;
+update those files when the location or first-run command for these docs
+changes.

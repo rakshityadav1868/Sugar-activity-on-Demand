@@ -1,0 +1,114 @@
+---
+title: Prompt to Activity
+description: Exact field mapping and request flow from the composer to an accepted project and revision.
+---
+
+This is the end-to-end path for the core product action. The UI gathers intent;
+`ActivitySpec` normalizes it; the service creates durable work; the pipeline
+turns one request into an accepted project; the UI adopts the returned result.
+
+![Detailed prompt-to-activity flow from composer and optional reference image
+through guided clarification, service, pipeline gates, project materialization,
+revision persistence, and Studio](/diagrams/prompt-to-activity.svg)
+
+## 1. Composer input
+
+The Create view collects prompt text, one or more learning areas, age band,
+collaboration mode, SPDX license, code-size target, provider/policy choices,
+enhancement setting, and an optional PNG/JPEG reference.
+
+`__send_button_clicked_cb()` rejects an empty prompt and waits if image
+normalization is still running. Without an image it enters guided generation.
+With an image it first analyzes the normalized in-memory pixels using a
+vision-capable provider when available.
+
+Reference handling has a strict privacy split:
+
+- normalized pixels and thumbnail remain in memory;
+- a short derived layout description may be appended to the backend request;
+- the raw image is never written into job, session, project, or XO history;
+- analysis failure does not block generation—the image can remain attached for
+  direct delivery to a capable code provider;
+- explicit remove, reset, or Studio close clears it.
+
+## 2. Clarification
+
+For a configured non-local provider, `_begin_guided_generation()` may enhance a
+short prompt, calls `llm.clarify.generate_questions()` off the GTK thread, and
+renders typed questions. Answers are folded into a bounded confirmed-
+requirements block by `llm.clarify.build_activity_prompt()`.
+
+Local-template mode skips this step. This difference is intentional: local
+generation is deterministic and remains useful as an offline smoke path.
+
+## 3. ActivitySpec construction
+
+`_submit_generation_from_prompt()` maps UI values into `core.spec.ActivitySpec`:
+
+| UI value | Spec field or transformation |
+| --- | --- |
+| visible learner idea | source for `name_from_prompt()` |
+| confirmed backend prompt | `prompt`, with collaboration prefix |
+| first learning area | `category` |
+| all selected learning areas | `categories` tuple |
+| license menu | SPDX `license_id` |
+| compact/standard/full | `code_size` |
+| primary/middle/senior/all | normalized `age_band` |
+
+The visible chat prompt and backend prompt are deliberately separate. The name
+comes from the learner's idea, not from mechanical “confirmed requirements”
+text.
+
+## 4. Durable submission
+
+`_submit_generation_spec()` resolves provider and policy, enforces a single
+active job, sets `validate_code=True`, creates generation-review context,
+switches to Studio, and calls `AODService.submit_activity()`.
+
+For a new activity it clears session and active-revision identifiers. For a
+refinement it keeps both and supplies `parent_revision_id`, ensuring that a
+failed child does not replace the last accepted parent.
+
+The service creates the job/session records before worker execution, returns a
+job ID immediately, and exposes `watch()` updates. Worker callbacks are
+marshalled back with `GObject.idle_add()`; GTK widgets must never be modified
+directly from the queue thread.
+
+## 5. Pipeline policy
+
+The pipeline performs the detailed stages documented in
+[Generation pipeline](../internals/generation-pipeline): optional enhancement,
+RAG selection, structured planning, one full code candidate, deterministic
+known repairs, static validation, runtime verification where available,
+transactional focused repair, critic review, icon/project creation, and
+packaging metadata.
+
+Two invariants prevent lineage corruption:
+
+1. After the first full candidate, fixes use anchored `SEARCH/REPLACE` patches,
+   not another silently regenerated file.
+2. A refinement receives current accepted source and compact plan context and
+   creates a child revision; it does not mutate the parent revision.
+
+## 6. Progress and acceptance
+
+The UI watches status, stage, fraction, message, enhanced prompt, draft source,
+repair history, and diagnostics. `_generation_job_updated_cb()` dispatches
+terminal states. On success it records `job.session_id` and the returned
+`revision_id`, then calls `_apply_generation_result()`.
+
+Acceptance performs all presentation updates together: set the result, clear
+live review context, complete animation, refresh Review and Versions, render
+Preview, enable refinement input, populate Activity Tools, and retain an
+in-memory reference for an intentional rebuild.
+
+## Refinement convergence
+
+Chat, Preview ask bar, and Activity Tools all converge on
+`_submit_refinement_from_prompt()`. Preview-origin changes add the selected
+target plus “keep the rest unchanged.” `_build_refinement_spec()` copies stable
+identity, categories, license, age, and template from the accepted result while
+keeping `prompt` focused on only the requested delta.
+
+That focused spec then uses the same job, validation, repair, persistence, and
+acceptance machinery as initial generation.

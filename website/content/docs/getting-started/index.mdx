@@ -1,0 +1,86 @@
+---
+title: Quick Start
+description: Install the native dependencies, launch the studio, and create a first activity.
+---
+
+## Requirements
+
+Sugar Activity Studio is a Python 3 and GTK 3 application for Linux. GTK,
+PyGObject, and the Sugar toolkit are distribution packages rather than PyPI
+dependencies.
+
+On Debian or Ubuntu:
+
+```sh
+sudo apt update
+sudo apt install python3-gi gir1.2-gtk-3.0 python3-sugar3 sugar-toolkit-gtk3
+```
+
+Python 3.8 or newer is supported. `sugar-artwork` is optional but gives the
+standalone app the native Sugar GTK and icon themes.
+
+## Run from a checkout
+
+```sh
+git clone https://github.com/sugarlabs/Sugar-activity-on-Demand.git
+cd Sugar-activity-on-Demand
+python3 bin/sugar-aod-studio
+```
+
+`python3 main.py` starts the same application. The launcher script is useful
+because it resolves symlinks and places the repository root on `sys.path`.
+
+To install a per-user command and desktop-menu entry while continuing to run
+the live checkout:
+
+```sh
+./install.sh
+sugar-aod-studio
+```
+
+Remove it with `./install.sh --uninstall`.
+
+## Connect a model
+
+Open the creation view, choose a provider, enter its API key, and save. The
+studio supports Gemini, OpenAI, OpenRouter, DeepSeek, Qwen, Moonshot,
+OpenCode, OpenCode Go, FreeModel, Claude, and Ollama. Provider availability
+and default models come from `llm/providers.py`; saved credentials and custom
+endpoints are managed by `llm/credentials.py`.
+
+For a keyless smoke test, select the local-template mode. It exercises local
+planning, RAG, project assembly, validation, preview, and packaging without
+calling a remote model. Model-driven refinement still requires a configured
+provider.
+
+## Create the first activity
+
+1. Choose one or more learning areas.
+2. Describe the activity behavior, audience, and learning goal.
+3. Optionally attach a PNG or JPEG reference and review the derived brief.
+4. With a model provider, answer the guided clarification questions. The
+   confirmed requirements go directly into generation. Local-template mode
+   skips the questions and submits the request immediately.
+5. Watch the generation stages and open the result in Preview, Review, or
+   Versions.
+6. Ask for a focused change, then export an `.xo`, Flatpak sources, or install
+   the activity under `~/Activities`.
+
+Generated projects are saved below:
+
+```text
+~/.sugar/default/aod/projects/<ActivityName>.activity/
+```
+
+Sessions and job records are stored beside them in `sessions/` and `jobs/`.
+
+## Verify the installation
+
+```sh
+python3 -c "import gi, sugar3; print('GTK/Sugar imports OK')"
+python3 -m pytest tests/ -q
+```
+
+The tests disable display-dependent runtime checks, critic calls, and AI icon
+generation by default through `tests/conftest.py`; individual tests opt back in
+when they exercise those paths.

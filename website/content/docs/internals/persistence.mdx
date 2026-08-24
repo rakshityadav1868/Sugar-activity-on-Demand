@@ -1,0 +1,96 @@
+---
+title: Service and Persistence
+description: Background jobs, sessions, revision history, on-disk stores, recovery, and cancellation.
+---
+
+## Public service
+
+`AODService` is the UI-facing backend facade. Its main responsibilities are:
+
+- submit initial and refinement jobs;
+- continue a saved failed repair;
+- watch/unwatch job progress;
+- cancel work;
+- resolve and configure providers;
+- expose sessions, revisions, and reflections;
+- restore persistent state on startup;
+- own the worker queue lifecycle.
+
+Production callers obtain the process singleton through `get_service()`.
+Tests normally inject temporary stores and provider doubles.
+
+## Job state machine
+
+```text
+queued
+  └─► planning ─► grounding ─► provider ─► generating
+          └───────────────────────────────► validating ─► packaging
+                                                         └─► finished
+any active state ─► failed | cancelled
+```
+
+`AODJob.update_progress()` clamps progress to `0..1` and never lets it move
+backward. Terminal jobs ignore later updates. Job serialization deliberately
+omits the in-memory provider, live result object, callback list, and reference
+pixels.
+
+Failed jobs may persist original source, best draft, diagnostics, plan, and
+repair audit so a user can continue without regeneration.
+
+## Sessions and revisions
+
+An `AODSession` groups one activity conversation:
+
+- normalized base spec;
+- ordered `AODMessage` transcript;
+- ordered `AODRevision` results;
+- active revision ID;
+- created/updated timestamps.
+
+Messages distinguish prompt, status, result, and error content. Revisions
+carry the generating job ID, prompt, result summary, optional parent revision,
+and learner-facing reflections.
+
+The store offers combined append operations for a revision and result message,
+or multiple messages, so related state is written in one load/mutate/save
+cycle.
+
+## Disk layout
+
+```text
+~/.sugar/default/aod/
+├── providers.env
+├── jobs/<job-id>.json
+├── sessions/<session-id>.json
+└── projects/<name>.activity/
+```
+
+Stores serialize formatted JSON to a sibling temporary file and use
+`os.replace()` for atomic publication. Unknown/malformed records are skipped
+during listing so one damaged file does not hide healthy data.
+
+## Startup recovery
+
+On construction, the service loads newest jobs first:
+
+- a non-terminal job becomes failed because its worker died with the prior
+  process;
+- a finished job attempts to restore its result from `result_summary` and the
+  project directory;
+- a missing finished artifact is demoted only in memory, leaving its disk
+  record eligible for later recovery;
+- old terminal jobs above the retention cap are pruned, except failed jobs
+  with a resumable draft.
+
+The current retention cap is 50 terminal records. Session and project stores
+do not use the same automatic pruning policy.
+
+## Threading and callbacks
+
+The queue runs workers outside the GTK main loop. Service maps pipeline stages
+to job statuses, throttles persistence of progress, and broadcasts callbacks.
+UI code must marshal widget changes back through GLib rather than mutate GTK
+widgets from worker threads.
+
+Cancellation is cooperative for running provider and pipeline work. Check
+`cancel_check` at meaningful boundaries when adding a long-running stage.

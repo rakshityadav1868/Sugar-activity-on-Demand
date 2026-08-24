@@ -1,0 +1,123 @@
+---
+title: Troubleshooting
+description: Diagnose native dependencies, display/runtime checks, providers, previews, persistence, packaging, and docs builds.
+---
+
+## GTK or Sugar imports fail
+
+Symptoms include the startup dependency message or `ModuleNotFoundError: gi`
+or `sugar3`.
+
+```sh
+sudo apt install python3-gi gir1.2-gtk-3.0 python3-sugar3 sugar-toolkit-gtk3
+python3 -c "import gi, sugar3; print('OK')"
+```
+
+Use the distribution Python. A PyPI virtual environment often cannot see the
+distribution's compiled GI bindings.
+
+## The app starts from a terminal but not an editor
+
+Snap-packaged editors can inject incompatible GTK/library paths. Try:
+
+```sh
+./start.sh
+```
+
+That script uses `/usr/bin/python3` and an intentionally minimal desktop
+environment. Compare its result before changing application imports.
+
+## Runtime check is skipped
+
+Inspect `runtime_check` in `aod_plan.json` or the Review view.
+
+- `skipped: disabled` — `AOD_RUNTIME_CHECK` is off.
+- `skipped: no display` — neither X11 nor Wayland is available.
+- `skipped: runtime infrastructure unavailable` — the independent GTK/Sugar
+  probe failed.
+
+Do not repair generated source for an infrastructure skip. Validate `DISPLAY`
+or `WAYLAND_DISPLAY`, toolkit imports, and GTK connectivity on the host.
+
+## Provider is shown as unconfigured
+
+Check the saved provider in the UI first. For environment configuration:
+
+```sh
+AOD_LLM_PROVIDER=openrouter \
+OPENROUTER_API_KEY=... \
+python3 main.py
+```
+
+Ollama requires an explicit `AOD_OLLAMA_MODEL`, `AOD_OLLAMA_URL`,
+`OLLAMA_HOST`, or `AOD_LLM_PROVIDER=ollama` signal. Test that its endpoint is
+reachable separately.
+
+If a saved keyring marker exists but the Secret Service cannot retrieve the
+key, the provider correctly reports unconfigured. Re-save the key or repair the
+desktop keyring rather than editing job files.
+
+## Model output stops early
+
+Length/truncation errors are deliberate and prevent partial Python from being
+accepted as complete. Select a smaller code size or a model with an adequate
+output limit. Provider budget overrides are documented in
+[Configuration](./configuration), but increasing them may increase cost and
+latency.
+
+## Generation keeps entering repair
+
+Read the persisted diagnostics and repair events rather than only the last UI
+message:
+
+```text
+~/.sugar/default/aod/jobs/<job-id>.json
+~/.sugar/default/aod/projects/<name>.activity/aod_plan.json
+```
+
+Common causes are unsupported imports, blocking work in `__init__`, invalid
+GTK/Sugar APIs, broken callbacks reached by runtime exercise, Journal methods,
+or request-specific behavior missing from the code.
+
+Use “Continue repairing” when a failed job retained a draft. Starting a new
+generation intentionally creates a different lineage.
+
+## Preview is blank or degraded
+
+Check the runtime status first. Preview can salvage partial UI for usability,
+but the runtime gate rejects degraded startup. Run the related tests and start
+with debug logs:
+
+```sh
+AOD_STUDIO_DEBUG=1 python3 main.py
+python3 -m pytest tests/test_preview.py tests/test_runtime.py -q
+```
+
+## XO packaging fails
+
+Verify `python3-sugar3`/`sugar-toolkit-gtk3`, the generated manifest, and write
+access to the project `dist/`. Run the focused tests:
+
+```sh
+python3 -m pytest tests/test_generator.py tests/test_activity_bundle.py -q
+```
+
+## Flatpak build is unavailable
+
+The source archive is still a valid export. A ready bundle additionally needs
+`flatpak-builder`, network access, GNOME Platform/SDK 46, and dependencies for
+building `sugar-toolkit-gtk3`. Follow the README inside that archive.
+
+## Fumadocs site does not build
+
+Use Node.js 22 or newer, then reinstall from the lockfile:
+
+```sh
+cd website
+npm install
+npm run typecheck
+npm run build
+```
+
+If a content error names an MDX page, check its YAML frontmatter, JSX tag
+closure, relative links, and `meta.json` ordering.

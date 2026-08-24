@@ -1,0 +1,84 @@
+---
+title: Preview and Live Edit
+description: How accepted generated code is embedded, selected, refined, and safely disposed.
+---
+
+Preview is not a screenshot or a handwritten simulation. It loads the accepted
+generated project through `preview.runner.render_activity_preview()` and embeds
+the returned GTK canvas and optional toolbar in Studio.
+
+![Preview lifecycle from accepted result through compatibility loading,
+embedding and edit handlers to cleanup and refinement](/diagrams/preview-lifecycle.svg)
+
+## Render lifecycle
+
+1. `_show_generated_activity_preview()` lets the completion animation settle,
+   then calls `_render_generated_activity_preview()`.
+2. `_render_live_generated_activity_preview()` passes the project path and
+   activity name to `preview.runner.render_activity_preview()`.
+3. The runner loads generated source through a preview compatibility host,
+   captures the activity instance, canvas, and toolbar, and returns them.
+4. The panel first clears the previous preview, then creates an event shell,
+   reparents toolbar/canvas, makes the canvas focusable, and installs keyboard
+   forwarding.
+5. After widgets are visible, live-edit handlers are attached. Handler failure
+   is logged without blanking an otherwise usable activity.
+
+If live rendering fails, the accepted result is retained. Studio shows a
+recoverable amber error, posts friendly details to chat, and directs the user
+to Review or refinement. This is distinct from generation failure: files and
+revision already passed acceptance.
+
+## Play and Edit event routing
+
+The preview shell changes `set_above_child()` with live-edit mode. In Play, the
+activity receives pointer events. In Edit, the shell intercepts them for target
+selection. Keyboard events are forwarded because generated activities often
+connect handlers to their Sugar activity window, which is never shown in the
+embedded preview.
+
+Widget selection walks the preview hierarchy and builds a human-readable
+target description. Canvas selection supports click picking and drag
+rectangles; the target includes the chosen zone/geometry. The overlay drawing
+is selection feedback only—it does not modify source directly.
+
+## Turning a target into a prompt
+
+The ask bar stores `_live_edit_target`, defaulting to “activity canvas.” A
+Preview-origin request is wrapped as:
+
+```text
+<selection context> Keep the rest of the activity working unchanged.
+Target: <described widget or canvas region>
+Change: <user instruction>
+```
+
+That becomes a focused refinement spec against the accepted parent source.
+The model does not receive a magic widget handle; it receives stable textual
+context. If you change target-description wording, update refinement tests
+because it directly affects patch quality.
+
+## Cleanup contract
+
+`_clear_activity_preview()` must run before replacing the result, returning
+Home, or tearing down the host. It:
+
+- detaches live-edit signal handlers;
+- removes embedded children and selection state;
+- calls `preview.runner.dispose_activity_preview()` for the live instance;
+- clears GLib sources, animation state, shell, canvas, and toolbar references.
+
+Generated activities may schedule timers or hold GTK objects. Forgetting
+cleanup creates callbacks into destroyed widgets, duplicated timers after
+refinement, or retained activity instances. Any new preview-owned resource
+needs a corresponding disposal path and regression test.
+
+## Safe extension checklist
+
+- Render only an accepted `GenerationResult.project_path`.
+- Keep source compatibility patches inside `preview/runner.py`, not permanent
+  edits to the generated project.
+- Marshal worker results to GTK before modifying widgets.
+- Ensure Play continues to deliver pointer and keyboard input.
+- Ensure Edit intercepts selection without activating the activity.
+- Exercise render → refine → render and render → Home cleanup sequences.

@@ -1,0 +1,75 @@
+---
+title: Export and Install
+description: Finalize identity and ship generated activities as XO bundles, installations, or Flatpak sources.
+---
+
+## Finalize the activity identity
+
+Before installation or export, the learner can confirm the name, SPDX license,
+icon, and Sugar stroke/fill colors. `apply_generation_install_options()`:
+
+1. validates the activity name;
+2. sanitizes the selected SVG again;
+3. applies canonical Sugar color entities;
+4. rewrites license artifacts and activity metadata;
+5. saves the choices in `aod_plan.json`;
+6. invalidates an existing bundle so the next package contains the changes.
+
+## XO bundle
+
+`package_generation_result()` calls Sugar's `bundlebuilder` for the generated
+project and writes an `.xo` below its `dist/` directory. It refreshes the file
+mapping and source hash after packaging.
+
+A generated project contains:
+
+```text
+<Name>.activity/
+├── activity.py
+├── activity/activity.info
+├── activity/activity.svg
+├── aod_plan.json
+├── LICENSE
+├── README.md
+├── setup.py
+├── po/<Name>.pot
+└── dist/<bundle>.xo
+```
+
+The `activity.info` manifest contains the name, deterministic bundle ID,
+entry class, version, SPDX license, participant limit, summary, and
+semicolon-delimited discovery tags.
+
+## Install and open
+
+Installation places the generated activity under `~/Activities` using Sugar's
+bundle APIs. Launching uses the system `sugar-activity3` command in a separate
+window. This is different from embedding the generated activity into the
+studio or adding it as a full live ring session.
+
+If launch fails, verify that `sugar-activity3` is on `PATH`, the generated
+bundle has a valid `activity.info`, and the system Sugar toolkit is complete.
+
+## Flatpak export
+
+The Flatpak exporter creates a source archive containing:
+
+- a validated reverse-DNS application ID and JSON manifest;
+- generated activity sources under `activity-src/`;
+- a `sugar-activity-run` wrapper;
+- a reproducible `build.sh` recipe;
+- a build-specific README.
+
+If `flatpak-builder` is available, the exporter also makes a best-effort
+attempt to build a `.flatpak`. The source archive remains the primary usable
+artifact when the GNOME 46 runtime, SDK, network, or toolkit build dependencies
+are unavailable.
+
+```sh
+./build.sh
+flatpak install --user <Activity>.flatpak
+```
+
+The exported manifest currently permits display, audio, GPU, network, and home
+filesystem access. Review those permissions before distributing a generated
+activity more broadly.

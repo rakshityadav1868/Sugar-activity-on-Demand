@@ -1,0 +1,86 @@
+---
+title: Review and Versions
+description: Live job inspection, accepted project files, immutable revision lineage, and source comparison semantics.
+---
+
+Review answers “what is in this build?” Versions answers “how did accepted
+`activity.py` change across builds?” They share source data but represent
+different scopes.
+
+![Review and revision model showing live job context, accepted project files,
+parent-child revisions, source lookup, and diff comparison](/diagrams/review-versions.svg)
+
+## Review during generation
+
+Review is useful before a job finishes. `_review_generation_context` tracks
+provider, stage, progress, message, prompt, whether this is a refinement, draft
+`activity.py`, repair history, and latest diagnostics.
+
+Before source exists, Review shows an explicit temporary scaffold and pending
+metadata. Once the provider returns draft source, `activity.py` switches to
+that source while `aod_plan.json` shows the live repair/check state. A failed
+job can therefore expose the last draft without promoting it to an accepted
+revision.
+
+## Review after acceptance
+
+The file navigator reads from `GenerationResult.files`:
+
+| Item | Meaning |
+| --- | --- |
+| `README.md` | generated classroom/learning description |
+| `LICENSE` | selected license text |
+| `activity/` | bundle metadata and icon paths |
+| `activity.py` | accepted runnable GTK/Sugar source |
+| `aod_plan.json` | normalized plan, provider, verification, and provenance |
+| `setup.py` | Sugar bundlebuilder entry point |
+
+Review is read-only. Activity Tools code-section links open `activity.py` and
+scroll approximately to a statically analyzed line.
+
+## Revision lineage
+
+Every successful initial build or refinement appends a session revision. A
+revision records its ID, optional parent ID, user prompt, creation time, and
+result summary including the project path, provider/model, and activity name.
+The active revision changes only after successful acceptance.
+
+```text
+session
+└── v1 initial accepted build
+    └── v2 focused refinement
+        └── v3 focused refinement
+
+failed or cancelled child job ──X── does not replace v3
+```
+
+The UI currently presents revisions in stored order and labels them `v1`,
+`v2`, and so on. That label is display order, not the persistent revision ID.
+
+## Source and diff modes
+
+The left column shows revision cards with label, timestamp, provider/model, and
+prompt summary. Selecting a card opens its source. The comparison controls pick
+Before and After revisions; Diff View formats a line comparison using
+`difflib.ndiff`. By default it compares the newest revision with its recorded
+parent, falling back to the previous item if necessary.
+
+For the active revision, source may come from the in-memory result. Historical
+source is read from the revision summary's project path. A moved or deleted
+project can therefore leave metadata visible while historical source is no
+longer available.
+
+<Callout type="warn" title="Versions is not source control">
+There is currently no checkout, rollback, merge, branch, or delete action in
+the Versions tab. It is a revision inspector and comparer. Git remains the
+version-control system for repository source; Studio revisions track generated
+learner projects.
+</Callout>
+
+## Adding rollback correctly
+
+A future rollback cannot merely replace the editor label. It should create a
+new accepted child revision whose source equals the chosen historical source,
+preserve the current parent, materialize a valid project directory, refresh
+Preview/Review/Versions atomically, and remain recoverable after restart. It
+also needs tests for missing historical paths and an active job.

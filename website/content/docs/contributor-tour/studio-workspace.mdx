@@ -1,0 +1,102 @@
+---
+title: Studio Workspace
+description: Layout, tabs, conversation, Activity Tools right drawer, and footer actions after submission.
+---
+
+Studio is the persistent workbench for both an active job and an accepted
+activity. `_create_studio_view()` builds a horizontal `Gtk.Paned`: conversation
+on the left and a workspace overlay on the right. The overlay contains the
+central tabbed workspace plus an optional Activity Tools drawer.
+
+![Studio layout showing left conversation, central Preview Review and Versions
+tabs, ask bar and footer, plus the overlay Activity Tools right drawer](/diagrams/studio-workspace.svg)
+
+## Layout anatomy
+
+| Region | GTK structure | Responsibility |
+| --- | --- | --- |
+| Left | first child of `Gtk.Paned`, initial split near 455 px | request transcript, progress messages, refinements, suggestions |
+| Center | preview panel inside `Gtk.Overlay` | toolbar, Preview/Review/Versions stack, ask bar |
+| Right | `Gtk.Revealer` overlay, slide-left transition | Activity Tools: Change or Understand |
+| Bottom | Studio footer | Back, Rebuild, Export XO, Export Flatpak, Install & Open |
+
+The drawer is intentionally an overlay, not a third `Gtk.Paned` child. It
+starts below the 50-pixel preview toolbar so the tab controls stay reachable,
+and it does not continually squeeze the generated activity on narrow screens.
+
+## Conversation pane
+
+Initial and refinement requests are appended as user messages. Provider,
+license, stage, repair, verification, and completion notices are separate
+status/assistant messages. While a job is active the composer is insensitive.
+After acceptance `_refresh_refinement_suggestions()` derives up to four
+editable suggestions from the actual plan and `activity.py`; clicking one fills
+the entry but does not submit it.
+
+## Central header and navigation
+
+The toolbar exposes:
+
+- **Preview**, **Review**, and **Versions** tabs;
+- **Fullscreen** for a larger activity surface;
+- **Live Edit On/Off** to switch selection interception;
+- **Review and install** as a shipping-oriented action;
+- **Change** (`🔧`) to reveal Activity Tools.
+
+The soft action pills are navigation aliases: Make opens Review, Play opens
+Preview, and Share opens Versions. `_select_studio_tab()` updates both the
+stack child and active CSS state; new navigation controls should call it rather
+than changing the stack directly.
+
+## Preview ask bar
+
+The centered ask bar provides two interaction modes:
+
+- **Play** lets events reach the generated activity.
+- **Edit** places the preview shell above the child so click/drag gestures pick
+  a widget or canvas region.
+
+The `+` action restores the whole `activity canvas` target. The target label,
+change entry, optional reference image, status, and send action then produce a
+focused refinement. A pasted image is detected before clipboard text.
+
+## Activity Tools drawer
+
+`_create_learning_sidebar()` creates a three-page stack: `home`, `change`, and
+`understand`. The home page deliberately offers only two journeys.
+
+### Change this activity
+
+The page derives preset changes from the accepted plan and source, supports a
+whole-activity or currently selected target, and accepts a custom instruction.
+Planning the change shows a confirmation summary. The request is not submitted
+until Apply; if the selected preset, custom text, or target changes afterward,
+the prior review is invalidated. Apply closes the drawer and sends the same
+refinement path used by chat and Preview.
+
+### Understand and reflect
+
+This page presents the learner goal, a plain-language explanation, and four
+reflection steps: Try it, Notice, Explain, Imagine. `generation.reflect`
+statically maps important source sections; selecting one closes the drawer,
+opens `activity.py` in Review, and scrolls near its starting line.
+
+Health rows summarize accepted-plan verification. Reflection notes are saved
+against the active session/revision when possible, with an in-memory fallback
+for reconstructed projects. “Turn observation into change” converts the note
+into a constrained improvement request and opens the Change page.
+
+## Footer actions
+
+- **Back** returns through the panel lifecycle and must preserve/cancel state
+  consistently.
+- **Rebuild** resubmits the activity intent, retaining an attached in-memory
+  reference until explicitly removed.
+- **Export XO** delegates Sugar bundle creation.
+- **Export Flatpak** creates Flatpak sources and attempts a bundle when tooling
+  permits.
+- **Install & Open** installs under `~/Activities` and launches through the
+  available host integration.
+
+Shipping controls operate on the accepted project, never on an unvalidated
+draft shown in Review.

@@ -1,0 +1,114 @@
+---
+title: New Contributor Tour
+description: A first-day route through the running product, source tree, state, and safest extension points.
+---
+
+This tour explains the application in the order a contributor experiences it:
+launch it, create an idea, follow the asynchronous build, play the accepted
+activity, inspect its files, refine it, and compare the resulting revisions.
+It complements the package-level [architecture guide](../architecture) with a
+feature-level map back to concrete methods and stored records.
+
+![Contributor route from host startup through creation, generation, Studio,
+refinement, and persisted revisions](/diagrams/contributor-route.svg)
+
+## The five-minute mental model
+
+Sugar Activity Studio is one local GTK process, not a browser application and
+not a client/server system. A thin desktop or Sugar host creates one
+`ui.panel.CreateAIActivityPanel`. That panel submits immutable `ActivitySpec`
+requests to `service.service.AODService`. Worker threads run the generation
+pipeline while GTK receives progress callbacks on its main loop. An accepted
+result is a directory of Sugar activity files plus a persistent session
+revision. Studio then renders, reviews, refines, exports, or installs it.
+
+```text
+host → shared GTK panel → local service → worker queue → generation pipeline
+                                              │
+model API / local builder ← provider boundary ┘
+                                              │
+                  accepted project + revision ┘ → Preview / Review / Versions
+```
+
+The single most important boundary is **candidate versus accepted source**.
+Provider output is only a candidate. It must pass deterministic normalization,
+request-aware static validation, runtime checks when the environment supports
+them, bounded repair, and optional critic review before it becomes the active
+revision shown in Preview.
+
+## First-day walkthrough
+
+1. Complete [development setup](../getting-started/development-setup), then run
+   `python3 main.py` from the repository root.
+2. Start with local-template mode to learn the UI without credentials or
+   network variability.
+3. Create a small activity and watch Preview, Review, and Versions during the
+   job—not only after completion.
+4. Enable Edit mode, select a widget or canvas region, and request one change.
+5. Open Versions and compare the original revision with the refinement.
+6. Run `python3 -m pytest tests/ -q` before changing behavior.
+
+## Read code in this order
+
+| Order | File | Question it answers |
+| --- | --- | --- |
+| 1 | `main.py` and `activity.py` | How is the same panel hosted? |
+| 2 | `ui/panel.py` | Which view is visible and what does each action submit? |
+| 3 | `core/spec.py` | What is the validated, provider-independent request? |
+| 4 | `service/service.py` | How are jobs queued, watched, cancelled, and persisted? |
+| 5 | `generation/pipeline.py` | Which policy stages run and in what order? |
+| 6 | `generation/validator.py` and `runtime_check.py` | What makes source acceptable? |
+| 7 | `preview/runner.py` | How does accepted code render without a Sugar shell? |
+| 8 | `service/sessions.py` | How do revisions, messages, and reflections survive restart? |
+
+## Runtime ownership rules
+
+| Concern | Owner | Do not put it in |
+| --- | --- | --- |
+| GTK widget construction and interaction state | `ui/` | provider adapters |
+| request validation and normalization | `core/` | button callbacks |
+| job lifecycle and persistence | `service/` | generation mechanisms |
+| stage ordering and fallback policy | `generation/pipeline.py` | UI progress code |
+| provider transport and credentials | `llm/` | generation templates |
+| generated-code compatibility and cleanup | `preview/` | source review widgets |
+| packaging formats | `exports/` and bundlebuilder | preview runner |
+
+## Follow a feature, not the 11,000-line panel
+
+`CreateAIActivityPanel` is large, so begin at a user action and follow only its
+callbacks. For example, creation starts at `__send_button_clicked_cb()`, enters
+`_begin_guided_generation()`, then `_submit_generation_from_prompt()` and
+`_submit_generation_spec()`. A preview refinement starts at
+`__ask_bar_send_cb()`, enters `_submit_refinement_from_prompt()`, and converges
+on that same submission method.
+
+Use these searches while navigating:
+
+```sh
+rg -n "def (__send_button_clicked_cb|_begin_guided_generation|_submit_generation_spec)" ui/panel.py
+rg -n "def (submit_activity|watch|cancel|get_session)" service
+rg -n "def (generate_activity|refine_activity|resume_repair)" generation
+rg -n "render_activity_preview|dispose_activity_preview" preview
+```
+
+## What to read next
+
+- [UI state machine](./ui-state-machine) explains Home, Create, Guided, and
+  Studio transitions.
+- [Prompt to activity](./prompt-to-activity) traces every major request field
+  and asynchronous boundary.
+- [Studio workspace](./studio-workspace) maps the left conversation, central
+  tabs, right Activity Tools drawer, and footer actions.
+- [Preview and live edit](./preview-and-live-edit) documents execution,
+  selection, cleanup, and refinement targeting.
+- [Review and versions](./review-and-versions) explains live drafts, project
+  files, revision lineage, and what comparison does not do.
+- [Change recipes](./change-recipes) identifies the code and tests to touch for
+  common contributions.
+
+<Callout type="warn" title="Source remains authoritative">
+If a visible control and a helper method disagree, trace the signal connection
+and caller. Unused or legacy helpers are not product behavior. The guided plan
+page is the current example: helper methods exist, but the active confirmation
+callback proceeds directly to build.
+</Callout>

@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1450" height="900" viewBox="0 0 1450 900" role="img" aria-labelledby="title desc">
+  <title id="title">Persistence and revision data model</title>
+  <desc id="desc">Entity relationship and file layout diagram for activity specs, sessions, messages, revisions, jobs, result summaries, generated projects, provider settings, and reference images.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0 0 L0 6 L9 3z" fill="#4b5563"/></marker>
+    <style>
+      .title{font:700 29px Inter,Arial,sans-serif;fill:#111827}.head{font:700 17px Inter,Arial,sans-serif;fill:#111827}.field{font:400 12px ui-monospace,SFMono-Regular,monospace;fill:#374151}.text{font:400 13px Inter,Arial,sans-serif;fill:#374151}.label{font:600 12px Inter,Arial,sans-serif;fill:#4b5563}.edge{stroke:#4b5563;stroke-width:2;fill:none;marker-end:url(#arrow)}.dash{stroke:#6b7280;stroke-width:2;stroke-dasharray:7 5;fill:none;marker-end:url(#arrow)}
+    </style>
+  </defs>
+  <rect width="1450" height="900" rx="24" fill="#f9fafb"/>
+  <text x="55" y="54" class="title">Persistence, restoration, and immutable revision lineage</text>
+
+  <rect x="55" y="105" width="255" height="165" rx="15" fill="#fee2e2" stroke="#dc2626" stroke-width="2"/>
+  <text x="80" y="138" class="head">ActivitySpec</text><text x="80" y="165" class="field">name · prompt · category</text><text x="80" y="187" class="field">categories · license_id</text><text x="80" y="209" class="field">template · age_band · goal</text><text x="80" y="231" class="field">code_size</text><text x="80" y="254" class="label">validated + normalized contract</text>
+
+  <rect x="390" y="105" width="300" height="205" rx="15" fill="#dcfce7" stroke="#16a34a" stroke-width="2"/>
+  <text x="415" y="138" class="head">AODSession</text><text x="415" y="165" class="field">session_id · title · spec</text><text x="415" y="187" class="field">messages[] · revisions[]</text><text x="415" y="209" class="field">active_revision_id</text><text x="415" y="231" class="field">created_at · updated_at</text><line x1="415" y1="250" x2="665" y2="250" stroke="#bbf7d0"/><text x="415" y="276" class="text">one conversation around one activity</text><text x="415" y="297" class="label">sessions/&lt;session-id&gt;.json</text>
+
+  <rect x="770" y="85" width="280" height="175" rx="15" fill="#e0f2fe" stroke="#0284c7" stroke-width="2"/>
+  <text x="795" y="118" class="head">AODMessage</text><text x="795" y="145" class="field">message_id · role · content</text><text x="795" y="167" class="field">message_type · job_id</text><text x="795" y="189" class="field">revision_id · created_at</text><text x="795" y="217" class="text">prompt · status · result · error</text><text x="795" y="241" class="label">embedded in session JSON</text>
+
+  <rect x="770" y="295" width="280" height="190" rx="15" fill="#ede9fe" stroke="#7e22ce" stroke-width="2"/>
+  <text x="795" y="328" class="head">AODRevision</text><text x="795" y="355" class="field">revision_id · job_id · prompt</text><text x="795" y="377" class="field">result_summary</text><text x="795" y="399" class="field">parent_revision_id</text><text x="795" y="421" class="field">reflections[] · created_at</text><text x="795" y="452" class="text">valid, parent-linked project version</text><text x="795" y="474" class="label">embedded in session JSON</text>
+
+  <rect x="1125" y="105" width="275" height="290" rx="15" fill="#fef3c7" stroke="#d97706" stroke-width="2"/>
+  <text x="1150" y="138" class="head">AODJob</text><text x="1150" y="165" class="field">job_id · spec · provider_name</text><text x="1150" y="187" class="field">status · stage · progress</text><text x="1150" y="209" class="field">session_id · parent_revision_id</text><text x="1150" y="231" class="field">result_summary · error</text><text x="1150" y="253" class="field">original_source · draft_source</text><text x="1150" y="275" class="field">repair_plan · diagnostics · history</text><text x="1150" y="297" class="field">timestamps · cancel_requested</text><line x1="1150" y1="316" x2="1375" y2="316" stroke="#fde68a"/><text x="1150" y="341" class="text">live unit of background work</text><text x="1150" y="363" class="label">jobs/&lt;job-id&gt;.json</text><text x="1150" y="383" class="label">reference bytes omitted</text>
+
+  <path d="M310 188 H380" class="edge"/><text x="320" y="176" class="label">session owns spec</text>
+  <path d="M690 160 H760" class="edge"/><text x="698" y="148" class="label">0..n</text>
+  <path d="M690 255 C735 255 730 390 760 390" class="edge"/><text x="700" y="320" class="label">0..n</text>
+  <path d="M1125 210 H700" class="dash"/><text x="900" y="199" class="label">belongs to session</text>
+  <path d="M1125 300 C1080 300 1085 370 1060 370" class="edge"/><text x="1068" y="337" class="label">success creates</text>
+  <path d="M910 485 V535" class="edge"/><text x="925" y="516" class="label">summary points to</text>
+
+  <rect x="390" y="555" width="660" height="245" rx="16" fill="#f3f4f6" stroke="#6b7280" stroke-width="2"/>
+  <text x="420" y="590" class="head">Generated project — projects/&lt;name&gt;.activity/</text>
+  <text x="420" y="623" class="field">activity.py</text><text x="620" y="623" class="text">accepted source + idempotent layout safeguard</text>
+  <text x="420" y="650" class="field">aod_plan.json</text><text x="620" y="650" class="text">plan · provenance · verification · hashes · audit</text>
+  <text x="420" y="677" class="field">activity/activity.info</text><text x="620" y="677" class="text">Sugar identity and executable contract</text>
+  <text x="420" y="704" class="field">activity/activity.svg</text><text x="620" y="704" class="text">sanitized Sugar-recolorable icon</text>
+  <text x="420" y="731" class="field">LICENSE · README · setup.py · po/</text><text x="760" y="731" class="text">distribution support</text>
+  <text x="420" y="758" class="field">dist/*.xo</text><text x="620" y="758" class="text">optional packaged bundle</text>
+  <text x="420" y="786" class="label">Reopen fallback needs only a parseable aod_plan.json.</text>
+
+  <rect x="55" y="555" width="255" height="150" rx="15" fill="#fef3c7" stroke="#d97706" stroke-width="2"/>
+  <text x="80" y="588" class="head">Provider settings</text><text x="80" y="617" class="field">providers.env</text><text x="80" y="641" class="text">model · endpoint · default</text><text x="80" y="665" class="text">API key fallback only</text><text x="80" y="690" class="label">libsecret preferred · mode 0600</text>
+
+  <rect x="1125" y="555" width="275" height="150" rx="15" fill="#fee2e2" stroke="#dc2626" stroke-width="2" stroke-dasharray="8 5"/>
+  <text x="1150" y="588" class="head">Reference image pixels</text><text x="1150" y="617" class="text">normalized PNG/JPEG bytes</text><text x="1150" y="641" class="text">active job memory only</text><text x="1150" y="665" class="text">never serialized or logged</text><text x="1150" y="690" class="label">only safe supplied flags persist</text>
+
+  <path d="M1125 630 H1060" class="dash"/><path d="M310 630 H380" class="dash"/>
+
+  <rect x="55" y="842" width="1345" height="36" rx="9" fill="#ffffff" stroke="#d1d5db"/>
+  <text x="78" y="866" class="label">Startup: unfinished job → failed · finished job → restore from summary/project · missing artifact → in-memory demotion only · malformed records → skip safely.</text>
+</svg>

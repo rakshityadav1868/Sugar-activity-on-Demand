@@ -1,0 +1,13 @@
+{
+  "title": "Sugar Activity Studio",
+  "pages": [
+    "index",
+    "getting-started",
+    "contributor-tour",
+    "user-guide",
+    "architecture",
+    "internals",
+    "reference",
+    "contributing"
+  ]
+}

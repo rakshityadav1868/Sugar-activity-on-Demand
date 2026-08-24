@@ -1,0 +1,103 @@
+---
+title: Contributor Change Recipes
+description: Where to implement and test common product changes without crossing architectural boundaries.
+---
+
+Use this page as a routing table. Start at the visible behavior, change the
+smallest owning layer, and keep UI, service, pipeline, and persistence contracts
+separate.
+
+## Add a Create option
+
+1. Add the control and selected value in `ui/panel.py`.
+2. If it is provider-independent behavior, add a validated field to
+   `core/spec.py`, including normalization and serialization.
+3. Thread it through planning/code prompts only where it changes generation.
+4. Add spec tests, panel mapping tests, and one pipeline test.
+
+Do not encode a new domain option only as prose concatenated in a button
+callback; it becomes impossible to validate, persist, or reopen reliably.
+
+## Change guided questions
+
+Work in `llm/clarify.py` for question generation, parsing, limits, and confirmed
+requirements. Work in the guided methods of `ui/panel.py` only for rendering
+question types and navigation. Remember that current confirmation goes
+directly to build; do not wire plan-page helpers accidentally without designing
+the entire approval/cancellation state.
+
+## Add a provider
+
+Implement the adapter/capabilities in `llm/providers.py`, credential behavior
+in `llm/credentials.py`, resolution/configuration in `service/service.py`, and
+selection UI in `ui/panel.py`. Cover timeout, error redaction, response
+extraction, model choice, image capability, and unavailable-key behavior. Then
+update [Providers](../internals/providers) and
+[Configuration](../reference/configuration).
+
+## Add a generation stage
+
+Put orchestration in `generation/pipeline.py` and the mechanism in a focused
+module. Define progress stage/message semantics, cancellation checkpoints,
+failure persistence, and whether the stage operates on candidate or accepted
+source. Update live Review if it exposes new diagnostics. Never perform GTK
+work from the pipeline.
+
+## Add an Activity Tools action
+
+Keep the drawer optional and confirmation-based. Derive presets from actual
+plan/source, invalidate confirmation when inputs or selection change, then
+converge on `_submit_refinement_from_prompt()` rather than inventing another
+generation route. Understand/Reflect features should remain read-only until an
+explicit Apply action.
+
+## Change live selection
+
+Update target discovery/description and overlay input behavior in
+`ui/panel.py`; update compatibility only in `preview/runner.py`. Test both Play
+and Edit, nested widgets, blank canvas regions, keyboard input, refinement, and
+cleanup. A visual selection is converted to text, so target wording is part of
+the model-facing contract.
+
+## Change revision behavior
+
+Use `service/sessions.py` and the public `AODService` methods. Preserve stable
+IDs, parent linkage, atomic persistence, reconstruction of older records, and
+the rule that failed jobs never become active revisions. Update the Versions
+UI only after the service contract is defined.
+
+## Add an exported artifact
+
+Generated Sugar project contents belong in `generation/generator.py`;
+distribution-specific formats belong in `exports/`. Validate names and paths,
+avoid shell interpolation, and ensure export uses accepted files only. Include
+artifact contract tests and document prerequisites/failure recovery.
+
+## Verification ladder
+
+Run the narrowest tests continuously, then the whole suite:
+
+```sh
+python3 -m pytest tests/test_spec.py -q
+python3 -m pytest tests/test_service.py tests/test_sessions.py -q
+python3 -m pytest tests/test_pipeline.py tests/test_preview_runner.py -q
+python3 -m pytest tests/ -q
+
+cd website
+npm run lint
+npm run typecheck
+npm run build
+```
+
+For GTK work, also manually verify both `python3 main.py` and the Sugar host
+when available. Tests intentionally disable some display/provider behavior, so
+a green unit suite does not prove pointer routing, focus, responsive layout, or
+host lifecycle.
+
+## Documentation completion rule
+
+A contribution is not finished when it changes any of these contracts without
+updating the matching page: UI transition, spec field, provider capability,
+pipeline stage, persisted schema, trust boundary, generated file, export
+requirement, or environment variable. Run the Fumadocs build to catch broken
+links and invalid MDX.

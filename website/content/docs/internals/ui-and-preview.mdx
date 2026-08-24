@@ -1,0 +1,67 @@
+---
+title: UI and Preview
+description: GTK composition, state ownership, ring layout, preview compatibility, and cleanup.
+---
+
+## UI composition
+
+`CreateAIActivityPanel` is the complete application surface. It owns creation
+options, provider configuration widgets, guided planning, progress, preview,
+review, versions, refinement, activity tools, export, and install state.
+
+`AODStudioWindow` adds desktop geometry and close handling.
+`StudioActivity` adds Sugar's toolbar and lifecycle. Both respond to the
+panel's `close-requested` GObject signal.
+
+`ui/theme.py` supplies the CSS and `ui/ring.py` implements Sugar-style polar
+placement for generated project icons. Artwork under `data/icons/` is bundled
+so important controls do not depend entirely on the host icon theme.
+
+## State ownership
+
+The panel keeps transient widget and selection state. Durable activity state
+belongs to the service stores and generated project directory. Do not make a
+widget the only owner of information needed after restart.
+
+Service callbacks may arrive from worker threads. Schedule GTK mutations on
+the main loop with `GLib.idle_add()` and make callbacks tolerant of a view that
+was closed or replaced.
+
+## Preview execution
+
+`render_activity_preview(project_path, activity_name)` reads the generated
+manifest and source, installs compatibility helpers, patches the source for
+the preview host, executes it, and returns a GTK activity instance that can be
+embedded in the Studio view.
+
+`PreviewActivity` substitutes the minimal Sugar activity services needed by
+generated code. Compatibility helpers cover common toolbar, bundle-path,
+adjustment, canvas, and lifecycle expectations without importing the Sugar
+shell.
+
+The runtime gate uses the same preview path in another process. This reduces
+the gap between what validation exercises and what the user later previews.
+
+## Cleanup
+
+Generated activities may register GLib sources, signals, windows, or callbacks.
+`dispose_activity_preview()` and internal tracking remove sources and destroy
+instances when switching revisions, leaving Studio, or closing the app.
+
+When adding preview compatibility:
+
+- keep it narrow and deterministic;
+- avoid hiding a real candidate bug that validation should repair;
+- apply equivalent behavior in the runtime harness path;
+- add cleanup for every registered source or external resource;
+- add tests in `tests/test_preview.py`, `tests/test_runtime.py`, and relevant
+  Studio contract tests.
+
+## Large UI module
+
+`ui/panel.py` is intentionally feature-dense and carries the extracted Sugar
+experience. Refactor it incrementally: preserve signal names, service
+boundaries, main-thread behavior, accessibility labels, and tests that inspect
+the source contract. A visual-only change can still affect generated code
+selection, installation, or cancellation state, so test the complete flow it
+touches.

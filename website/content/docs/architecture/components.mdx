@@ -1,0 +1,164 @@
+---
+title: Components and Ownership
+description: Detailed module catalog, public contracts, dependency rules, threading model, and extension seams.
+---
+
+The most reliable way to change this project is to start from ownership: find
+the component that owns the invariant, use its public contract, and keep
+transport or UI details from leaking across layers.
+
+## Component catalog
+
+| Component | Owns | Consumes | Produces |
+| --- | --- | --- | --- |
+| `main.py` | dependency check, desktop theme, GTK loop | host environment | `AODStudioWindow` lifecycle |
+| `activity.py` | Sugar activity lifecycle and toolbar | Sugar activity handle | shared panel hosted as canvas |
+| `ui/window.py` | desktop window geometry and close behavior | shared panel | normal GTK window |
+| `ui/panel.py` | all visible workflow and transient widget state | `AODService`, project results | specs, job actions, preview/export UI |
+| `ui/reference_image.py` | safe image decoding and normalization | file or clipboard pixels | bounded in-memory `ReferenceImage` |
+| `core/spec.py` | request schema, validation, normalization | UI selections and prompt | provider-independent `ActivitySpec` |
+| `service/service.py` | application use cases and recovery | specs, provider settings, callbacks | jobs, revisions, notifications |
+| `service/queue.py` | worker scheduling and shutdown | `AODJob` | execution of service worker function |
+| `service/jobs.py` | job state machine and job JSON | spec, progress, pipeline failure/result | resumable persistent job |
+| `service/sessions.py` | transcript and revision graph | messages and result summaries | persistent activity conversation |
+| `generation/pipeline.py` | generation/refinement policy | spec, provider, callbacks, parent source | `GenerationResult` or rich `PipelineError` |
+| `generation/generator.py` | plan normalization and project assembly | spec, plan, accepted source | Sugar project tree and XO bundle |
+| `generation/rag.py` | local Sugar retrieval corpus | installed activity roots and query | ranked `RagDocument` references |
+| `generation/codegen.py` | generation prompt and source extraction | normalized plan and references | complete candidate Python text |
+| `generation/validator.py` | static acceptance policy | source/spec/plan/project/bundle | structured `ValidationReport` |
+| `generation/runtime_check.py` | isolated execution policy | complete candidate | pass/fail/skip detail |
+| `generation/runtime_harness.py` | GTK execution exercise | temporary activity project | process exit and sanitized diagnostics |
+| `generation/repair_loop.py` | bounded transactional repair | source, diagnostics, verifier | repaired source or preserved failure |
+| `generation/refine.py` | exact patch grammar/application | raw patch response and current source | parsed patches and candidate source |
+| `generation/critic.py` | one final model review | accepted source and warnings | unchanged or reverified patched source |
+| `generation/icons.py` | SVG generation and sanitization | provider/spec/plan or fallback | safe Sugar-recolorable SVG |
+| `preview/runner.py` | interactive compatibility host | accepted project | embeddable activity widgets |
+| `exports/flatpak.py` | Flatpak source staging | generation result | source archive and optional bundle |
+| `llm/providers.py` | provider capabilities and transports | prompts, credentials, reference bytes | normalized plan/text/source/errors |
+| `llm/credentials.py` | saved provider configuration | key/model/endpoint | keyring or owner-private profile state |
+
+## Primary contracts
+
+### `ActivitySpec`
+
+`ActivitySpec` is the only request object that should cross from UI/service into
+generation. Call `validate()` before enqueueing and use `normalized()` for the
+persisted job. Category, template, and code-size steering have safe fallbacks;
+name, prompt, license, and age requirements remain validation errors when
+invalid.
+
+### `AODService`
+
+UI code should use these application operations rather than call pipeline
+functions directly:
+
+- `submit_activity()` — validate, ensure session, create job, persist, enqueue;
+- refinement submission against a parent revision;
+- `resume_repair()` — create a repair-only job from preserved failure state;
+- `watch()` / `unwatch()` — observe persistent progress;
+- `cancel_job()` — cooperative cancellation;
+- provider configuration/status operations;
+- session and reflection access.
+
+The service owns mapping low-level pipeline stages to stable job statuses.
+
+### `GenerationResult`
+
+A successful pipeline returns a result with its normalized spec, plan,
+project/bundle paths, text file mapping, provider, and model. The plan is the
+durable audit/restoration contract; the result object itself is process-local.
+Jobs persist only a result summary and restore the full result from disk.
+
+### `PipelineError`
+
+Pipeline failure is richer than a string. When code exists it may carry:
+
+- best complete `source` draft;
+- bounded `repair_history`;
+- structured `diagnostics`;
+- current normalized `plan`.
+
+The service must preserve these fields so continuation uses the same source
+lineage and bundle identity.
+
+## Dependency rules
+
+```text
+Allowed at module level:
+ui → service → generation → llm → core
+ui → preview / exports
+generation → Sugar toolkit / preview runtime path
+
+Deliberate exception:
+llm.providers → generation.codegen/prompts extraction helpers
+
+Forbidden:
+core → higher layers
+service → ui
+generation → ui
+any standalone module → jarabe
+```
+
+Avoid importing `ui.panel` from non-UI code. It is large, initializes GTK/Sugar
+symbols, and would turn headless service or generation tests into graphical
+tests.
+
+## Threading model
+
+```text
+GTK main thread
+  ├── widget events
+  ├── service submission and watch registration
+  └── GLib.idle_add(result/progress rendering)
+
+AODJobQueue worker
+  ├── provider network requests
+  ├── RAG and generation
+  ├── filesystem assembly and packaging
+  └── progress callback into service
+
+runtime-check child process
+  └── GTK candidate execution with minimal environment
+```
+
+GTK widgets must only be touched on the main thread. Locks in service and stores
+protect in-process maps and file mutation; they do not make GTK objects
+thread-safe.
+
+## Extension seams
+
+### Add a provider
+
+Implement the provider capability contract, register factory/status/defaults,
+add credential variables if persistable, and test payloads, extraction,
+refusal, truncation, retries, and secret redaction. Do not branch on provider
+name throughout the pipeline.
+
+### Add a generation gate
+
+Return structured diagnostics, make infrastructure failure distinguishable
+from candidate failure, call it from the single candidate verifier, and ensure
+initial generation, automatic repair, critic patches, and refinement all use
+the same gate.
+
+### Add a generated artifact
+
+Write it in `assemble_project()`, expose it through `read_project_files()`, add
+project and bundle validation where necessary, define restoration compatibility,
+and document it in the generated-project contract.
+
+### Add a Studio feature
+
+Keep durable state in service/session/project models, schedule callback-driven
+widget updates on GTK's main loop, dispose preview resources, and cover both
+desktop and Sugar activity hosts.
+
+## High-coupling areas
+
+- `ui/panel.py` connects nearly every user workflow; change it incrementally.
+- `generation/pipeline.py` defines safety and cost policy; a small fallback
+  change can alter provider usage or source lineage.
+- `aod_plan.json` is consumed by reopening, review, refinement, packaging, and
+  tests; treat fields as a version-tolerant schema.
+- preview and runtime gate share compatibility behavior but differ in trust and
+  process isolation; keep them aligned without weakening the gate.

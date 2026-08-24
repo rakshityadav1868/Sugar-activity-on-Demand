@@ -1,0 +1,101 @@
+---
+title: Configuration Reference
+description: Environment variables for providers, generation, verification, repair, UI diagnostics, and desktop integration.
+---
+
+Saved UI settings normally take precedence through `AODCredentialStore`.
+Environment variables are useful for development, automation, and deployments
+that do not use the settings UI.
+
+## Provider selection and credentials
+
+| Variable | Purpose |
+| --- | --- |
+| `AOD_LLM_PROVIDER` | force the provider name; aliases such as `local`, `offline`, and `template` select `local-template` |
+| `GEMINI_API_KEY` | Gemini key |
+| `OPENAI_API_KEY` | OpenAI key |
+| `OPENROUTER_API_KEY` | OpenRouter key |
+| `DEEPSEEK_API_KEY` | DeepSeek key |
+| `QWEN_API_KEY` | Qwen key |
+| `MOONSHOT_API_KEY` | Moonshot key |
+| `OPENCODE_API_KEY` | shared OpenCode Zen/Go key |
+| `FREEMODEL_API_KEY` | FreeModel key |
+| `ANTHROPIC_API_KEY` | Claude key |
+| `OLLAMA_HOST` | Ollama base host, default `http://127.0.0.1:11434` |
+
+Each cloud provider has `AOD_<PROVIDER>_MODEL` and
+`AOD_<PROVIDER>_ENDPOINT` overrides. OpenCode Go uses
+`AOD_OPENCODE_GO_MODEL` and `AOD_OPENCODE_GO_ENDPOINT`. Ollama additionally
+accepts `AOD_OLLAMA_URL`; `AOD_OLLAMA_ENDPOINT` overrides the complete
+generation endpoint.
+
+Current model defaults:
+
+| Provider | Default model |
+| --- | --- |
+| Gemini | `gemini-2.5-flash` |
+| OpenAI | `gpt-4.1-mini` |
+| OpenRouter | `google/gemini-3.5-flash` |
+| DeepSeek | `deepseek-chat` |
+| Qwen | `qwen-turbo` |
+| Moonshot | `moonshot-v1-8k` |
+| OpenCode Zen | `claude-sonnet-4-6` |
+| OpenCode Go | `kimi-k2.7-code` |
+| FreeModel | `gpt-5.5` |
+| Claude | `claude-sonnet-4-6` |
+| Ollama | `llama3.1` |
+
+<Callout type="info">
+Defaults are operational code, not a compatibility promise. Check
+`llm/providers.py` when debugging a future checkout.
+</Callout>
+
+## Provider timing and output
+
+| Variable | Default | Meaning |
+| --- | ---: | --- |
+| `AOD_PROVIDER_PLAN_TIMEOUT` | `120` | plan/enhancement request timeout in seconds |
+| `AOD_PROVIDER_CODEGEN_TIMEOUT` | `300` | code/patch request timeout in seconds |
+| `AOD_PROVIDER_TRANSIENT_RETRIES` | `2` | retries after the initial transient HTTP/network failure |
+| `AOD_CODEGEN_MAX_TOKENS` | `16384` | general code-generation budget |
+| `AOD_GEMINI_CODEGEN_MAX_OUTPUT_TOKENS` | `9000` | Gemini output budget |
+| `AOD_OPENROUTER_PLAN_MAX_TOKENS` | `4096` | bounded OpenRouter JSON plan budget |
+| `AOD_OPENROUTER_FAST_CODEGEN_MAX_TOKENS` | `16384` | non-reasoning OpenRouter code budget |
+| `AOD_OPENROUTER_CODEGEN_MAX_TOKENS` | `32000` | reasoning-model OpenRouter code budget |
+| `AOD_OPENROUTER_CODEGEN_REASONING_EFFORT` | `minimal` | OpenRouter code-generation reasoning effort |
+| `AOD_FREEMODEL_REASONING_EFFORT` | `xhigh` | FreeModel plan/general reasoning effort |
+| `AOD_FREEMODEL_CODEGEN_REASONING_EFFORT` | `high` | FreeModel code-generation effort |
+| `AOD_CLAUDE_VERSION` | `2023-06-01` | Anthropic API version header |
+
+Invalid integer values fall back to their defaults. Provider-specific endpoint
+and budget logic can clamp unsafe extremes.
+
+## Verification and repair
+
+| Variable | Default | Meaning |
+| --- | ---: | --- |
+| `AOD_RUNTIME_CHECK` | `on` | set to `off`, `0`, `no`, or `false` to disable runtime verification |
+| `AOD_RUNTIME_CHECK_TIMEOUT` | `25` | entire runtime subprocess timeout in seconds |
+| `AOD_RUNTIME_SPIN_SECONDS` | `3.0` | event-loop duration inside the harness |
+| `AOD_CRITIC` | `on` | enable the post-acceptance model review |
+| `AOD_AI_ICON` | `on` | enable model-drawn icon attempt |
+| `AOD_CODE_REPAIR_ATTEMPT_LIMIT` | `8` | repair budget, clamped to `1..50` |
+| `AOD_REPAIR_FOCUS` | `on` | use diagnostic-focused prompt views for large source |
+| `AOD_REPAIR_FOCUS_MIN_LINES` | `60` | minimum source size before focus is considered |
+| `AOD_REPAIR_FOCUS_MAX_PCT` | `70` | maximum focused percentage of the full source |
+
+Tests set runtime checks, critic, and AI icon generation off by default to stay
+deterministic and avoid provider/display dependencies.
+
+## Desktop and diagnostics
+
+| Variable | Purpose |
+| --- | --- |
+| `AOD_STUDIO_DEBUG` | enable debug logging in `main.py` |
+| `SUGAR_SCALING=100` | prefer the `sugar-100` theme rather than `sugar-72` |
+| `DISPLAY`, `WAYLAND_DISPLAY`, `XAUTHORITY` | GTK display selection and runtime-gate availability |
+| `SUGAR_AOD_CLIPBOARD_DISPLAY` | explicit display used by clipboard fallback logic |
+| `SUGAR_AOD_CLIPBOARD_XAUTHORITY` | explicit Xauthority for clipboard fallback logic |
+
+Do not place API keys in generic shell history, debug logs, or shared service
+files. Prefer the settings UI and Secret Service where available.

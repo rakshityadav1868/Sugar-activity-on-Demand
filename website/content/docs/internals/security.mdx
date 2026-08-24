@@ -1,0 +1,95 @@
+---
+title: Validation and Security
+description: Trust boundaries for model responses, generated Python, runtime execution, SVGs, secrets, and exports.
+---
+
+Generated code and every model response are untrusted. The studio combines
+format constraints, static checks, subprocess isolation, audit metadata, and
+fail-closed patching; no single mechanism is the security boundary.
+
+## Static validation
+
+`generation/validator.py` parses generated Python and rejects unsafe or invalid
+structure. Checks include:
+
+- syntax and a valid `GeneratedActivity` class;
+- expected Sugar activity inheritance and lifecycle methods;
+- import and call allowlists;
+- blocked network, process, and unsafe filesystem behavior;
+- request-specific mechanics and UI quality;
+- project artifacts and `activity.info` validity;
+- final `.xo` bundle structure.
+
+Warnings are preserved as retry/critic guidance without necessarily rejecting
+a candidate. Errors block acceptance.
+
+## Runtime gate
+
+`generation/runtime_check.py` first probes host infrastructure independently.
+Only after GTK can connect and the Sugar preview host imports does it execute a
+candidate in a temporary activity directory.
+
+The subprocess environment is rebuilt from a narrow allowlist containing
+desktop/session variables, locale, user/home, path, and runtime timing. It does
+not inherit provider API keys, proxy secrets, or unrelated host configuration.
+
+The harness starts the activity, pumps GTK events, exercises delayed state,
+and performs a Journal write/read round trip. Timeout, startup degradation, or
+crash becomes repair feedback. Missing display or broken host infrastructure is
+reported as a skip and does not blame the candidate.
+
+## Patch safety
+
+Both refinement and automatic repair require exact patch blocks. Ambiguous
+anchors, partial transactions, whole-file replacements, cycles, credential
+material, and malformed responses are refused. A proposed candidate becomes
+active only after its gates pass or it makes verified intermediate progress
+under the repair algorithm.
+
+## Credential boundary
+
+- Prefer libsecret; profile-file fallback is permission-restricted.
+- Never put keys in prompts, diagnostics, plans, source, jobs, or UI logs.
+- Redact exception strings against all known provider secret values.
+- Reject model output containing a configured secret rather than merely hiding
+  it after accepting code.
+- Reference-image binary data follows a similar non-persistence rule.
+
+## SVG boundary
+
+`generation/icons.py` permits a narrow SVG shape vocabulary and removes
+scripts, images, text, gradients, event handlers, and external references. It
+reapplies the canonical Sugar entity header. Anything invalid falls back to a
+deterministic template/category glyph. User-selected icons are sanitized again
+at install time.
+
+## Preview boundary
+
+`preview/runner.py` runs accepted source in-process for an interactive preview,
+so its compatibility patches, import controls, resource cleanup, and prior
+validation all matter. Preview is not a sandbox for arbitrary Python files;
+only feed it a generated project that has passed the pipeline.
+
+## Export boundary
+
+Provider-supplied bundle IDs are validated before use as Flatpak application
+IDs, filenames, or shell arguments. Invalid IDs fall back to a deterministic
+safe value. Archive and build operations use explicit staging paths.
+
+## Security review checklist
+
+When a change touches model input, generated output, filesystem paths,
+subprocesses, persistence, or exports, verify:
+
+- the new data's trust level and lifetime;
+- exact serialization behavior;
+- redaction before logging or persistence;
+- bounded time, output, memory, and retry behavior;
+- path and identifier validation;
+- rollback behavior after partial failure;
+- regression tests for both acceptance and refusal.
+
+<Callout type="error" title="Not a general Python sandbox">
+The runtime gate and preview are designed for the studio's restricted generated
+activity contract. Do not expose them as arbitrary code execution services.
+</Callout>

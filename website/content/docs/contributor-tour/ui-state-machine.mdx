@@ -1,0 +1,75 @@
+---
+title: UI State Machine
+description: Every major screen, transition, lock, cancellation path, and reopening path in CreateAIActivityPanel.
+---
+
+The panel uses GTK stacks and revealers rather than URL routes. Its state is a
+combination of the top-level view (`home`, `create`, or `studio`), the Studio
+tab, the optional guided page, the active job, the accepted result, and the
+Activity Tools drawer.
+
+![UI state machine showing Home, Create, Guided clarification, generation,
+Studio tabs, refinement, failure, cancellation, and reopen transitions](/diagrams/ui-state-machine.svg)
+
+## Top-level states
+
+| State | Entry | Exit | Important state |
+| --- | --- | --- | --- |
+| Home | launch or `reset_view()` | New activity or open project | generated-project ring |
+| Create | new-activity action | Send, Back | prompt, learning areas, provider, license, code size, reference |
+| Guided | `_begin_guided_generation()` for non-local provider | confirm answers or back | questions, answers, enhanced prompt |
+| Studio building | `_submit_generation_spec()` | success, failure, cancel | job ID, session ID, live progress/draft |
+| Studio ready | `_apply_generation_result()` or reopen | refine, export, install, back | accepted result and active revision |
+
+`reset_view()` is a full interaction reset: it cancels/detaches generation,
+closes Activity Tools, clears reference-image memory, clears accepted result
+and review/session identifiers, disposes the preview, refreshes Home projects,
+and resets the prompt. Contributors should not reproduce only part of this
+cleanup in a new navigation callback.
+
+## Guided path versus local path
+
+`_begin_guided_generation()` asks the service to resolve the selected provider.
+Local-template generation deliberately bypasses clarification and calls the
+one-shot submission path. Remote providers may auto-enhance a short prompt and
+then call `llm.clarify.generate_questions()` on a worker thread. The callback
+returns through `GObject.idle_add()` before touching GTK.
+
+Questions can be single choice, multiple choice, or free text; “Other” is an
+additional free-text route. `_commit_guided_and_build()` formats the answers as
+confirmed requirements and calls `_start_guided_build()`.
+
+There is no active separate plan-approval state. `_begin_plan_phase()` and
+`_show_plan_page()` remain in the file, but normal signal flow bypasses them.
+The pipeline's later internal plan is a different concept and remains active.
+
+## Locking rules
+
+While guided clarification or generation is active:
+
+- Preview, Review, and Versions cannot be treated as an accepted result;
+- Activity Tools is closed and disabled until an accepted result exists;
+- the chat/refinement input is disabled while a job is active;
+- a second submission is rejected with “Already generating”;
+- Review may still show a temporary scaffold, draft source, progress, and
+  repair diagnostics from `_review_generation_context`.
+
+## Reopen path
+
+Home uses `core.projects.list_generated_projects()` to discover generated
+directories. Opening one attempts to reconnect it to the persisted session and
+latest revision. If session metadata is missing, the application can rebuild a
+result from project artifacts such as `aod_plan.json`. `_apply_generation_result`
+is shared by fresh completion and reopen; `announce=False` prevents fake “just
+generated” chat messages.
+
+## Failure and cancellation
+
+A hard failure keeps useful context when possible: error text, stage, draft
+source, diagnostics, and repair history are displayed through the Studio and
+persisted job. A preview-render failure is softer: accepted files still exist,
+Review remains available, and the user can submit a refinement.
+
+Cancellation has two responsibilities. The service job must reach a consistent
+cancelled state, and the panel must ignore callbacks for a detached job ID.
+Always preserve both checks when altering navigation or shutdown behavior.

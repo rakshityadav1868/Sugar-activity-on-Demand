@@ -1,0 +1,121 @@
+---
+title: State and Security Model
+description: Persistence entities, immutable revision relationships, restoration behavior, trust zones, and sensitive-data rules.
+---
+
+State in Sugar Activity Studio serves two different purposes: user-visible
+continuity and safety auditability. Sessions preserve the creative conversation
+and valid versions; jobs preserve execution and failure recovery; projects
+preserve distributable source and verification provenance.
+
+## Persistence model
+
+![Entity and file relationship diagram for ActivitySpec, sessions, messages,
+revisions, jobs, generated projects, provider settings, and memory-only
+reference pixels](/diagrams/persistence-model.svg)
+
+### Entity relationships
+
+- One session owns one normalized base spec, many messages, and many revisions.
+- A job belongs to a session and may identify a parent revision.
+- A successful job creates one revision and result message atomically.
+- A revision result summary points to one generated project directory.
+- A refinement revision points to its valid parent revision; it does not modify
+  that parent's files.
+- Jobs and revisions reference each other by IDs rather than embedding live
+  Python objects.
+
+### Publication guarantees
+
+Job and session JSON writes use a sibling temporary file followed by
+`os.replace()`. Provider settings additionally `fsync()` and enforce owner-only
+permissions. Readers tolerate missing optional fields, malformed individual
+records, and unavailable project artifacts.
+
+Project assembly creates a new `.activity` directory, then writes the complete
+set of text artifacts. Packaging is a later, repeatable step and refreshes the
+shipped source hash after Sugar's bundlebuilder runs.
+
+### Retention
+
+The service keeps the newest 50 terminal jobs by default. Older terminal jobs
+are pruned except failed jobs with a draft that can still be repaired. Session
+and project retention is user-controlled; automatic job pruning must never
+delete generated project directories.
+
+## Trust zones
+
+![Security trust boundaries from learner and provider input through validation
+and isolated execution into accepted projects, preview, persistence, and
+export](/diagrams/security-boundaries.svg)
+
+### Untrusted zone
+
+Treat learner-controlled paths/text, decoded image files, installed RAG source,
+provider JSON, generated Python, patch blocks, and generated SVG as untrusted.
+Installed Sugar examples are prompt context, not executable input to the
+generation process.
+
+### Validation and containment zone
+
+The trust transition is a chain:
+
+1. validate and normalize request/plan structure;
+2. parse/extract response format;
+3. scan generated Python with request-aware static policy;
+4. probe host runtime infrastructure separately;
+5. execute the candidate in a minimal-environment subprocess;
+6. accept critic or repair patches only through exact transactions and the
+   same gates;
+7. sanitize SVGs and identifiers before writing/export.
+
+No individual step makes arbitrary Python safe. Together they enforce the
+studio's narrower generated-activity contract.
+
+### Accepted local zone
+
+Accepted projects may be previewed in-process because the source already
+crossed the pipeline gates. Preview compatibility is designed for these
+projects and is not an arbitrary-code sandbox. Distribution through XO or
+Flatpak is another trust decision: maintainers should still review generated
+behavior and requested Flatpak permissions before publication.
+
+## Sensitive-data matrix
+
+| Data | Memory | Provider request | Job/session JSON | Plan/project | Logs |
+| --- | --- | --- | --- | --- | --- |
+| learner prompt | yes | yes | yes | summary/plan context | safe errors only |
+| provider API key | provider object | authorization only | no | no | redacted |
+| reference pixels | active request only | vision-capable call | no | no | no |
+| reference brief | yes | yes | prompt/session as text | safe flags/context | safe errors only |
+| generated source | yes | repair/critic context | failed draft may persist in job | accepted `activity.py` | do not dump wholesale |
+| repair diagnostics | yes | repair context | bounded/redacted | bounded audit | redacted |
+
+## Runtime subprocess environment
+
+The runtime check constructs a new environment from an allowlist rather than
+copying the parent wholesale. It includes display/session, locale, path,
+home/user, temporary directory, and the runtime spin setting. Provider keys,
+proxy credentials, editor variables, and unrelated application configuration
+are absent.
+
+The infrastructure probe imports GTK and the preview host and confirms display
+connectivity before source execution. Probe failure yields `runtime_unverified`;
+it must never become bogus repair feedback.
+
+## Security invariants for review
+
+- A provider secret found in any response causes refusal, not only display
+  masking.
+- Reference-image bytes are excluded from every serializer.
+- Runtime failures replace temporary project paths and home paths in returned
+  diagnostics.
+- Patch application is all-or-nothing and anchored to exact source text.
+- Flatpak application IDs are validated before filenames, manifests, or shell
+  commands use them.
+- SVG sanitization removes active/external content and restores canonical Sugar
+  color entities.
+- The standalone application never imports Sugar shell (`jarabe`) modules.
+
+See [Validation and Security](../internals/security) for the implementation
+checklist and [Persistence and Service](../internals/persistence) for store APIs.

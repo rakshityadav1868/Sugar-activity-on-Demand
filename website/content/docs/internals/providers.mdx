@@ -1,0 +1,100 @@
+---
+title: LLM Providers
+description: Provider interface, resolution order, credentials, capabilities, retries, and extension steps.
+---
+
+## Provider interface
+
+All model access implements `LLMProvider` in `llm/providers.py`:
+
+```python
+class LLMProvider:
+    name = 'provider'
+    model = ''
+    label = 'Provider'
+
+    def generate_plan(self, system_prompt, user_prompt, timeout=...): ...
+    def generate_text(self, system_prompt, user_prompt, timeout=...,
+                      stream_callback=None): ...
+    def generate_activity_source(self, system_prompt, user_prompt,
+                                 timeout=..., stream_callback=None): ...
+    def supports_image_input(self): ...
+    def analyze_reference_image(self, student_request, image_data,
+                                mime_type, timeout=...): ...
+```
+
+Plans return a JSON object. `generate_text()` returns raw text for patch flows.
+`generate_activity_source()` extracts a complete Python candidate and rejects
+empty or truncated responses. Image support is an explicit capability.
+
+## Implementations
+
+| Provider family | Implementation |
+| --- | --- |
+| Gemini | native Google Generative Language requests and streaming |
+| OpenAI | OpenAI chat/responses-compatible behavior |
+| OpenRouter, DeepSeek, Qwen, Moonshot, OpenCode, OpenCode Go | configured OpenAI-compatible provider |
+| FreeModel | responses-style endpoint |
+| Claude | Anthropic Messages API |
+| Ollama | local `/api/generate` endpoint |
+| Local template | represented by no provider object |
+
+Provider defaults are centralized in `_provider_model()`. Do not duplicate a
+model list in the UI or service; use `get_provider_statuses()`.
+
+## Resolution order
+
+For interactive service work:
+
+1. expand `default` to the saved preferred provider or environment default;
+2. use a runtime provider override registered for tests or the current process;
+3. load saved key/model/endpoint settings;
+4. use environment variables;
+5. return no provider for `local-template`.
+
+The environment default selects the first configured cloud provider in a
+stable order, then Ollama when explicitly configured, then local-template.
+
+## Credential storage
+
+`AODCredentialStore` prefers the desktop Secret Service via libsecret. If no
+keyring is available, it writes an allowlisted `providers.env` in the Sugar
+profile with directory mode `0700` and file mode `0600`. Writes use a temporary
+file, `fsync`, and atomic replacement.
+
+API keys are never included in generated project files. Error redaction and
+response leak checks run in enhancement, clarification, icon, pipeline, critic,
+and repair paths.
+
+## Networking behavior
+
+Provider requests use bounded plan and code-generation timeouts. Transient
+transport and selected HTTP failures are retried by `_urlopen_with_retry()`;
+errors reaching pipeline planning are treated as final for that request. Each
+provider normalizes malformed, blocked, refused, empty, or length-truncated
+responses into `ProviderError`.
+
+OpenRouter adds the Sugar HTTP referer/title headers and treats model reasoning
+and token budgets separately for plan and code generation. Gemini and
+OpenRouter support the reference-image path used by the UI.
+
+## Add a provider
+
+1. Add a concrete `LLMProvider` implementation or a safe entry in the
+   OpenAI-compatible configuration.
+2. Add key/model/endpoint variables to `llm/credentials.py` if settings are
+   persistable.
+3. Register the factory, label, default model, key variable, aliases, status,
+   and default resolution behavior.
+4. Implement clear refusal, truncation, HTTP, and malformed-response errors.
+5. Expose image capability only when the transport contract supports it.
+6. Add tests for construction, payloads, response extraction, credentials,
+   error redaction, status, aliases, defaults, and timeouts.
+7. Update [Configuration](../reference/configuration) and the user-facing
+   provider list.
+
+<Callout type="warn" title="Treat responses as hostile input">
+Never trust a provider to respect response format, preserve secrets, emit valid
+Python, or return a safe SVG. Parsing, redaction, sanitization, and validation
+are mandatory boundaries.
+</Callout>

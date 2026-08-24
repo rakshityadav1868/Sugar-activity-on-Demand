@@ -1,0 +1,73 @@
+---
+title: Development Setup
+description: Prepare the Python application and Fumadocs site for contributor work.
+---
+
+## Application checkout
+
+The repository intentionally is not pip-installable. Packages such as `core`,
+`generation`, and `ui` live at the repository root, while GTK and Sugar are
+provided by the operating system.
+
+```sh
+git clone https://github.com/sugarlabs/Sugar-activity-on-Demand.git
+cd Sugar-activity-on-Demand
+sudo apt install python3-gi gir1.2-gtk-3.0 python3-sugar3 sugar-toolkit-gtk3
+```
+
+Install the test and lint tools in a way appropriate for your distribution or
+development environment, then run:
+
+```sh
+python3 -m pytest tests/ -q
+python3 -m flake8 core llm generation service exports preview ui main.py activity.py
+```
+
+Avoid a virtual environment that hides distribution-owned `gi` and `sugar3`
+packages. If an editor or Snap injects incompatible library paths, try
+`./start.sh`; it launches the system Python with a minimal, explicitly
+allowlisted desktop environment.
+
+## Documentation site
+
+The Fumadocs site is isolated under `website/` and requires Node.js 22 or
+newer.
+
+```sh
+cd website
+npm install
+npm run dev
+```
+
+Open [http://localhost:3000/docs](http://localhost:3000/docs). Before
+committing a docs change:
+
+```sh
+npm run lint
+npm run typecheck
+npm run build
+```
+
+## Useful development switches
+
+```sh
+AOD_STUDIO_DEBUG=1 python3 main.py
+AOD_RUNTIME_CHECK=off python3 main.py
+AOD_CRITIC=off AOD_AI_ICON=off python3 main.py
+AOD_LLM_PROVIDER=ollama AOD_OLLAMA_MODEL=llama3.1 python3 main.py
+```
+
+These are diagnostic controls, not production defaults. See
+[Configuration](../reference/configuration) for the complete list and the
+security implications.
+
+## Repository expectations
+
+- Preserve the layering described in [Architecture](../architecture).
+- Keep imports compatible with Python 3.8 unless the project baseline changes.
+- Never import `jarabe`; the standalone studio may use the Sugar toolkit only.
+- Add regression tests for behavior changes, especially around provider
+  responses, persistence, generated code, and safety gates.
+- Keep provider-specific HTTP details inside `llm/providers.py`.
+- Update these docs when changing a workflow, persisted schema, environment
+  variable, generated artifact, or contributor command.

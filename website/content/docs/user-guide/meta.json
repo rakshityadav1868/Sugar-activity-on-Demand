@@ -1,0 +1,5 @@
+{
+  "title": "User Guide",
+  "icon": "MousePointerClick",
+  "pages": ["index", "create-and-refine", "export-and-install"]
+}

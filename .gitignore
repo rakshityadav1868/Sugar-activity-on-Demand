@@ -7,3 +7,9 @@ build/
 *.xo
 *.AppImage
 packaging/appimage/tools/
+website/.next/
+website/.source/
+website/node_modules/
+website/out/
+website/*.tsbuildinfo
+website/next-env.d.ts

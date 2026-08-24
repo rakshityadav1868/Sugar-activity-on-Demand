@@ -1,0 +1,82 @@
+---
+title: Create and Refine
+description: Write effective requests, use references, review verification, and make focused changes.
+---
+
+## Write a useful activity request
+
+Describe observable behavior rather than only a topic. A strong request says
+what the learner does, what feedback appears, and what completion means.
+
+```text
+Build a fraction matching game for ages 8–10. Show a fraction on the left and
+four visual choices on the right. Give immediate feedback, track five rounds,
+and show a replay button after the final score.
+```
+
+The activity name is editable and limited to 80 characters. The prompt limit
+is 12,000 characters.
+
+## Reference images
+
+PNG and JPEG references can guide visual structure. The UI normalizes the
+attachment and asks a vision-capable provider to turn it into a textual brief.
+OpenRouter can retry known vision routes when the selected route is text-only.
+
+The pixels remain in memory for the active request and are intentionally
+excluded from serialized jobs, sessions, plans, logs, and generated projects.
+Only safe booleans indicating that a reference or reference brief was supplied
+are persisted.
+
+Use a reference for layout and visual intent, then state behavior and
+accessibility needs in text. A screenshot does not define interaction logic.
+
+## Understand verification
+
+The review view separates several checks:
+
+| Check | Meaning |
+| --- | --- |
+| Code checks | AST, imports, calls, structure, and request-specific quality passed |
+| Activity launch | the isolated GTK/Sugar runtime gate passed, failed, or was unavailable |
+| Journal save test | generated `write_file` and `read_file` survived a round trip |
+| Model review | the critic returned `OK` or supplied a patch that re-passed the gates |
+
+A runtime status beginning with `skipped` means infrastructure verification was
+unavailable or disabled; it is not equivalent to a runtime pass. The plan
+records this distinction.
+
+## Request a refinement
+
+Make one bounded request against the current version:
+
+```text
+Keep the game rules unchanged. Add a visible “3 of 5” round counter above the
+choices and move keyboard focus to the replay button after the final score.
+```
+
+The provider must return exact `SEARCH/REPLACE` blocks. Every search anchor
+must match exactly once. All patches are applied as one transaction; a partial
+match rolls the candidate back. The edited source then passes the same static
+and runtime gates as an initial candidate.
+
+Successful refinement:
+
+- increments `activity_version`;
+- records parent, original, and current source hashes;
+- appends the request and bounded repair audit to `aod_plan.json`;
+- creates a child revision in the session;
+- assembles a new project directory without mutating the parent revision.
+
+## Compare versions
+
+Session revisions form a parent-linked history rather than overwriting the
+only copy. The active revision ID determines which project and source the UI
+shows. Reflections from `generation/reflect.py` explain structural areas and
+changes for review without affecting generated code.
+
+<Callout type="warn" title="No hidden full regeneration">
+If a requested change cannot be produced or repaired within the attempt
+budget, the refinement fails and preserves its best draft. The previous valid
+revision remains usable.
+</Callout>

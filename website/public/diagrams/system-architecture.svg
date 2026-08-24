@@ -1,0 +1,126 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="940" viewBox="0 0 1400 940" role="img" aria-labelledby="title desc">
+  <title id="title">Sugar Activity Studio system architecture</title>
+  <desc id="desc">Layered component diagram from desktop and Sugar hosts through the GTK panel, local service, generation pipeline, model providers, validation, preview, persistence, and export systems.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#4b5563"/>
+    </marker>
+    <marker id="arrow-purple" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#7e22ce"/>
+    </marker>
+    <style>
+      .title { font: 700 30px Inter,Arial,sans-serif; fill: #111827; }
+      .subtitle { font: 400 15px Inter,Arial,sans-serif; fill: #4b5563; }
+      .layer { font: 700 15px Inter,Arial,sans-serif; fill: #374151; letter-spacing: .08em; }
+      .box-title { font: 700 17px Inter,Arial,sans-serif; fill: #111827; }
+      .box-text { font: 400 13px Inter,Arial,sans-serif; fill: #374151; }
+      .small { font: 400 12px Inter,Arial,sans-serif; fill: #4b5563; }
+      .edge { stroke: #4b5563; stroke-width: 2; fill: none; marker-end: url(#arrow); }
+      .primary-edge { stroke: #7e22ce; stroke-width: 3; fill: none; marker-end: url(#arrow-purple); }
+      .async-edge { stroke: #4b5563; stroke-width: 2; stroke-dasharray: 7 6; fill: none; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <rect width="1400" height="940" rx="24" fill="#f9fafb"/>
+  <text x="60" y="58" class="title">Sugar Activity Studio — system architecture</text>
+  <text x="60" y="86" class="subtitle">One local GTK application, two hosts, a persistent background service, and a policy-driven generation pipeline.</text>
+
+  <text x="38" y="151" class="layer" transform="rotate(-90 38 151)">HOSTS</text>
+  <rect x="80" y="120" width="270" height="95" rx="14" fill="#ede9fe" stroke="#7e22ce" stroke-width="2"/>
+  <text x="105" y="151" class="box-title">Standalone desktop</text>
+  <text x="105" y="177" class="box-text">main.py → AODStudioWindow</text>
+  <text x="105" y="198" class="small">Gtk.main · theme · dependency check</text>
+
+  <rect x="390" y="120" width="270" height="95" rx="14" fill="#ede9fe" stroke="#7e22ce" stroke-width="2"/>
+  <text x="415" y="151" class="box-title">Sugar activity</text>
+  <text x="415" y="177" class="box-text">activity.py → StudioActivity</text>
+  <text x="415" y="198" class="small">Sugar toolbar · activity lifecycle</text>
+
+  <rect x="770" y="120" width="270" height="95" rx="14" fill="#fef3c7" stroke="#d97706" stroke-width="2"/>
+  <text x="795" y="151" class="box-title">External model APIs</text>
+  <text x="795" y="177" class="box-text">Gemini · OpenAI · Claude · compatible</text>
+  <text x="795" y="198" class="small">HTTPS or local Ollama endpoint</text>
+
+  <rect x="1080" y="120" width="240" height="95" rx="14" fill="#fef3c7" stroke="#d97706" stroke-width="2"/>
+  <text x="1105" y="151" class="box-title">Host platform</text>
+  <text x="1105" y="177" class="box-text">GTK 3 · Sugar toolkit</text>
+  <text x="1105" y="198" class="small">display · Journal APIs · bundlebuilder</text>
+
+  <text x="38" y="335" class="layer" transform="rotate(-90 38 335)">PRESENTATION</text>
+  <rect x="80" y="260" width="580" height="150" rx="16" fill="#e0f2fe" stroke="#0284c7" stroke-width="2"/>
+  <text x="110" y="293" class="box-title">ui.panel.CreateAIActivityPanel</text>
+  <text x="110" y="321" class="box-text">Home · Create · Guided planning · Progress · Studio</text>
+  <text x="110" y="345" class="box-text">Preview · Review · Versions · Refine · Ship</text>
+  <line x1="110" y1="363" x2="630" y2="363" stroke="#bae6fd"/>
+  <text x="110" y="388" class="small">ui/ring.py · ui/theme.py · ui/reference_image.py</text>
+
+  <rect x="770" y="260" width="270" height="150" rx="16" fill="#e0f2fe" stroke="#0284c7" stroke-width="2"/>
+  <text x="800" y="293" class="box-title">preview.runner</text>
+  <text x="800" y="321" class="box-text">PreviewActivity compatibility host</text>
+  <text x="800" y="345" class="box-text">source patching · widget capture</text>
+  <text x="800" y="369" class="box-text">GLib source and instance cleanup</text>
+  <text x="800" y="393" class="small">Accepted project input only</text>
+
+  <rect x="1080" y="260" width="240" height="150" rx="16" fill="#e0f2fe" stroke="#0284c7" stroke-width="2"/>
+  <text x="1110" y="293" class="box-title">exports.flatpak</text>
+  <text x="1110" y="321" class="box-text">validated app ID</text>
+  <text x="1110" y="345" class="box-text">manifest + launcher + sources</text>
+  <text x="1110" y="369" class="box-text">best-effort bundle build</text>
+
+  <text x="38" y="520" class="layer" transform="rotate(-90 38 520)">APPLICATION</text>
+  <rect x="80" y="455" width="580" height="150" rx="16" fill="#dcfce7" stroke="#16a34a" stroke-width="2"/>
+  <text x="110" y="488" class="box-title">service.AODService</text>
+  <text x="110" y="516" class="box-text">submit · refine · resume repair · watch · cancel</text>
+  <text x="110" y="540" class="box-text">provider resolution · progress persistence · recovery</text>
+  <line x1="110" y1="558" x2="630" y2="558" stroke="#bbf7d0"/>
+  <text x="110" y="582" class="small">AODJobQueue (worker threads) · callbacks marshalled to GTK</text>
+
+  <rect x="770" y="455" width="550" height="150" rx="16" fill="#f3f4f6" stroke="#6b7280" stroke-width="2"/>
+  <text x="800" y="488" class="box-title">File-backed state</text>
+  <text x="800" y="516" class="box-text">jobs/*.json — progress, failure drafts, repair audit</text>
+  <text x="800" y="540" class="box-text">sessions/*.json — transcript, revisions, active revision</text>
+  <text x="800" y="564" class="box-text">projects/*.activity — source, plan, icon, license, XO</text>
+  <text x="800" y="588" class="small">~/.sugar/default/aod · atomic os.replace publication</text>
+
+  <text x="38" y="722" class="layer" transform="rotate(-90 38 722)">DOMAIN</text>
+  <rect x="80" y="650" width="580" height="190" rx="16" fill="#fae8ff" stroke="#a21caf" stroke-width="2"/>
+  <text x="110" y="683" class="box-title">generation pipeline</text>
+  <text x="110" y="711" class="box-text">enhance → RAG → plan → one full code candidate</text>
+  <text x="110" y="735" class="box-text">known repairs → static gate → runtime gate → critic</text>
+  <text x="110" y="759" class="box-text">transactional patch repair → icon → project → package</text>
+  <line x1="110" y1="778" x2="630" y2="778" stroke="#f5d0fe"/>
+  <text x="110" y="803" class="small">pipeline.py owns policy; focused modules own mechanisms</text>
+  <text x="110" y="824" class="small">generator · validator · runtime_check · repair_loop · refine</text>
+
+  <rect x="710" y="650" width="290" height="190" rx="16" fill="#fef3c7" stroke="#d97706" stroke-width="2"/>
+  <text x="740" y="683" class="box-title">llm boundary</text>
+  <text x="740" y="711" class="box-text">provider transports</text>
+  <text x="740" y="735" class="box-text">credential/keyring access</text>
+  <text x="740" y="759" class="box-text">enhance · clarify · reference</text>
+  <text x="740" y="786" class="small">timeouts · retries · extraction</text>
+  <text x="740" y="807" class="small">refusal/truncation normalization</text>
+
+  <rect x="1030" y="650" width="290" height="190" rx="16" fill="#fee2e2" stroke="#dc2626" stroke-width="2"/>
+  <text x="1060" y="683" class="box-title">core contracts</text>
+  <text x="1060" y="711" class="box-text">ActivitySpec validation</text>
+  <text x="1060" y="735" class="box-text">license catalog</text>
+  <text x="1060" y="759" class="box-text">project discovery/reopen</text>
+  <text x="1060" y="786" class="small">provider-independent data</text>
+  <text x="1060" y="807" class="small">compatibility fallbacks</text>
+
+  <path d="M215 215 V245 H310 V260" class="primary-edge"/>
+  <path d="M525 215 V245 H430 V260" class="primary-edge"/>
+  <path d="M370 410 V455" class="primary-edge"/>
+  <path d="M370 605 V650" class="primary-edge"/>
+  <path d="M660 530 H770" class="async-edge"/>
+  <path d="M660 730 H710" class="edge"/>
+  <path d="M1000 730 H1030" class="edge"/>
+  <path d="M855 650 V230 H905 V215" class="async-edge"/>
+  <path d="M660 700 C720 700 700 335 770 335" class="edge"/>
+  <path d="M660 790 C910 900 1130 625 1190 410" class="edge"/>
+  <path d="M1040 335 H1080" class="edge"/>
+  <path d="M1200 260 V215" class="edge"/>
+
+  <rect x="80" y="875" width="1240" height="38" rx="10" fill="#ffffff" stroke="#d1d5db"/>
+  <text x="102" y="900" class="small">Solid purple = primary request path · solid gray = dependency/call · dashed gray = asynchronous, persistence, or external I/O</text>
+</svg>

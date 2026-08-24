@@ -1,0 +1,79 @@
+---
+title: Launch and Distribution Modes
+description: Understand the desktop, Sugar ring, XO, and AppImage entry points.
+---
+
+## Standalone desktop
+
+`main.py` checks GTK and Sugar toolkit imports, applies Sugar themes when
+available, creates `AODStudioWindow`, and enters `Gtk.main()`. The window hosts
+one `CreateAIActivityPanel`.
+
+Supported commands:
+
+```sh
+python3 main.py
+python3 bin/sugar-aod-studio
+./start.sh
+```
+
+`bin/sugar-aod-studio` is the normal repository launcher. `start.sh` is a
+diagnostic workaround for environments that inject incompatible library
+paths.
+
+## Desktop-menu registration
+
+```sh
+./install.sh
+```
+
+This creates a symlink in `~/.local/bin`, a desktop entry in
+`~/.local/share/applications`, and a launcher icon. The application continues
+to run from the checkout, so `git pull` updates it.
+
+## Sugar activity ring
+
+```sh
+./install.sh --ring
+```
+
+This runs `python3 setup.py dev`, linking the checkout as
+`~/Activities/SugarActivityStudio.activity`. The Sugar shell reads
+`activity/activity.info` and launches `activity.StudioActivity`, which embeds
+the same panel in a Sugar `Activity` with an activity toolbar and stop button.
+
+The ring entry implements no per-instance Journal document: project and
+session state already lives under the shared AOD profile directory.
+
+## Studio XO bundle
+
+```sh
+python3 setup.py dist_xo
+```
+
+Sugar's `bundlebuilder` writes the studio's distributable `.xo` under `dist/`.
+This is separate from the `.xo` bundles the studio generates for learners.
+
+## Portable AppImage
+
+```sh
+./packaging/appimage/build-appimage.sh
+```
+
+The build combines linuxdeploy, its GTK plugin, the system CPython runtime,
+PyGObject, Sugar toolkit, Sugar/Rsvg typelibs, libraries, themes, schemas, CA
+certificates, and the repository. Output:
+
+```text
+dist/Sugar_Activity_Studio-x86_64.AppImage
+```
+
+The current build script targets x86_64 and a Python 3.12 system stack. It
+downloads build tools on first use, expects a modern glibc, and may require
+`--appimage-extract-and-run` when FUSE is unavailable.
+
+<Callout type="warn" title="Two different bundles">
+The studio bundle packages Sugar Activity Studio itself. Generated activity
+bundles package a learner's `GeneratedActivity`. Keep these release paths and
+their tests distinct.
+</Callout>

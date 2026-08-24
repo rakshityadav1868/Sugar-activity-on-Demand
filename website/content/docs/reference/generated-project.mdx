@@ -1,0 +1,71 @@
+---
+title: Generated Project Contract
+description: Files, plan metadata, Sugar manifest semantics, source lineage, and packaging invariants.
+---
+
+`generation/generator.py` assembles every accepted activity as a normal Sugar
+activity source tree.
+
+## File contract
+
+| File | Generated content |
+| --- | --- |
+| `activity.py` | accepted provider or template source plus idempotent native layout safeguards |
+| `activity/activity.info` | Sugar bundle identity, entry point, version, license, participants, summary, tags |
+| `activity/activity.svg` | sanitized and Sugar-recolorable activity icon |
+| `aod_plan.json` | normalized plan, provenance, verification, source lineage, and repair audit |
+| `LICENSE` | selected SPDX license text |
+| `README.md` | learner goal, usage steps, features, classroom notes, generation details |
+| `setup.py` | Sugar bundlebuilder entry point |
+| `po/<Name>.pot` | gettext template extracted from literal `_()` calls |
+| `dist/*.xo` | optional packaged Sugar bundle |
+
+`read_project_files()` excludes `dist/`, `__pycache__/`, and binary files from
+the in-memory text mapping.
+
+## Plan contract
+
+The exact plan can grow compatibly, but maintainers should preserve these
+categories of data:
+
+- request identity: name, category/categories, age, license, goal;
+- implementation: template, class, bundle ID, version, interaction model;
+- educational content: summary, steps, features, classroom flow, notes,
+  assessment, materials;
+- provenance: provider, model, code source, grounding references;
+- verification: runtime detail, critic outcome, verification status;
+- lineage: original, parent, and current source hashes;
+- repair/refinement: request history, status, attempts, bounded event audit;
+- icon: safe SVG source and selected Sugar colors;
+- privacy-safe reference flags, never the image bytes.
+
+Readers must tolerate absent fields from older projects and unknown fields from
+newer versions. Writers should store JSON-compatible primitives only.
+
+## Identity rules
+
+The default bundle ID combines a safe name-derived class stem and a short hash
+of the name and prompt. The generated manifest always runs:
+
+```text
+sugar-activity3 activity.GeneratedActivity
+```
+
+Two-student board activities use `max_participants = 2`; other activities are
+single-user unless their normalized interaction model clearly indicates
+partner/multiplayer behavior. Tags are semicolon-separated because that is
+what Sugar's parser expects.
+
+## Version and hash rules
+
+- Initial activity version starts at the normalized plan value, normally `1`.
+- Refinement increments the parent's integer version by one.
+- Hash the shipped `activity.py`, including the appended layout bootstrap.
+- A refinement parent hash must match the source actually being edited.
+- Repackaging identity/license/icon changes invalidates the previous `.xo`.
+
+## Compatibility
+
+`core/projects.py` treats a directory as reopenable when `aod_plan.json`
+parses to a dictionary. Keep that minimum restoration path working even when a
+session or job record is missing.

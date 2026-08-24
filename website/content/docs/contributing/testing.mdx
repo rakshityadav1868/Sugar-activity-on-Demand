@@ -1,0 +1,95 @@
+---
+title: Testing Guide
+description: Test organization, deterministic defaults, focused commands, doubles, and high-risk regression coverage.
+---
+
+## Full checks
+
+```sh
+python3 -m pytest tests/ -q
+python3 -m flake8 core llm generation service exports preview ui main.py activity.py
+```
+
+The suite uses pytest, `unittest.mock`, temporary directories, provider doubles,
+and lightweight GTK/Sugar stubs where appropriate.
+
+## Deterministic defaults
+
+`tests/conftest.py` adds the repository root to `sys.path` and defaults these
+features off:
+
+```text
+AOD_RUNTIME_CHECK=off
+AOD_CRITIC=off
+AOD_AI_ICON=off
+```
+
+Tests that cover the real paths opt in explicitly and mock the environment or
+subprocess. Never make ordinary unit tests depend on a paid API key, live
+network endpoint, interactive display, or desktop keyring.
+
+## Test map
+
+| Area | Main files |
+| --- | --- |
+| request and project discovery | `test_spec.py`, `test_projects.py` |
+| credentials and providers | `test_credentials.py`, `test_providers.py` |
+| enhancement, clarification, reference | `test_enhance.py`, `test_clarify.py`, `test_reference_image.py` |
+| prompts/RAG/plans/templates | `test_prompts.py`, `test_rag.py`, `test_generator.py` |
+| extraction, validation, known repairs | `test_pipeline.py`, `test_validator.py`, `test_known_repairs.py` |
+| repair, focus, refinement | `test_repair_loop.py`, `test_focus.py`, `test_refine.py` |
+| runtime, preview, critic, icons | `test_runtime.py`, `test_preview.py`, `test_critic.py`, `test_icons.py` |
+| jobs, sessions, queue, recovery | `test_service.py` |
+| export and packaging | `test_flatpak.py`, `test_activity_bundle.py` |
+| UI/source contracts | `test_studio.py` |
+| source reflection | `test_reflect.py` |
+
+## Provider doubles
+
+Use small provider objects with `name`, `model`, and only the methods needed by
+the scenario. Assert exact or structural payload properties at the provider
+unit boundary. Pipeline tests should focus on sequencing, fallback, progress,
+redaction, and result state rather than re-testing every HTTP detail.
+
+Always cover:
+
+- success;
+- malformed/empty/truncated response;
+- refusal and HTTP error;
+- timeout/retry behavior;
+- credential leak redaction;
+- image capability mismatch when relevant.
+
+## Repair tests
+
+Repair/refinement changes need tests for unique matches, missing matches,
+duplicate matches, partial transaction rollback, complete-file refusal,
+cycles, secret leakage, attempt exhaustion, verified intermediate progress,
+source hashes, and resumption from persisted state.
+
+## Runtime tests
+
+Distinguish candidate failure from unavailable infrastructure. Mock
+`subprocess.run()` for unit cases and assert the minimal environment excludes
+secrets. A successful harness scenario should cover start, draw/event handling,
+delayed state, and Journal round trip.
+
+## UI contract tests
+
+Much of `test_studio.py` inspects source and lightweight objects because a full
+Sugar desktop is not available in CI. When changing UI implementation, keep
+those assertions tied to user-visible contracts rather than incidental
+formatting. Add an interactive manual check for geometry, focus, keyboard, or
+clipboard behavior that cannot be represented reliably in the suite.
+
+## Documentation checks
+
+```sh
+cd website
+npm run lint
+npm run typecheck
+npm run build
+```
+
+The production build compiles every MDX page and statically exercises page,
+Markdown, LLM text, and Open Graph routes.

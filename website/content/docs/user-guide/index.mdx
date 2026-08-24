@@ -1,0 +1,76 @@
+---
+title: User Workflow
+description: Follow the studio from the home ring through creation, review, refinement, and shipping.
+---
+
+The application has three main views: Home, Create, and Studio. The UI is
+implemented by `CreateAIActivityPanel` in `ui/panel.py`; the surrounding
+window changes between desktop and Sugar launch modes, but the workflow does
+not.
+
+## Home
+
+Home reads generated project directories through `core/projects.py` and lays
+them out around the learner's XO using `ui/ring.py`.
+
+From Home you can:
+
+- create a new activity;
+- reopen an existing project;
+- reconnect a project to its saved session and latest revision when available;
+- fall back to reconstructing an `ActivitySpec` from `aod_plan.json` when its
+  session no longer exists.
+
+A malformed project is skipped rather than breaking the gallery.
+
+## Create
+
+The creation view collects:
+
+- a primary and optional additional learning areas;
+- activity idea and generated name;
+- age band and learning goal;
+- model provider and optional prompt enhancement;
+- code size and license;
+- optional PNG or JPEG reference image.
+
+The learning-area choice is discovery context, not permission to invent
+curriculum or mechanics absent from the prompt. `ActivitySpec.normalized()`
+preserves the primary category first and removes invalid or duplicate values.
+
+## Guided clarification
+
+With a configured provider, the studio can ask targeted clarifying questions,
+format the learner's answers as confirmed requirements, and start the build.
+Confirmed requirements are marked explicitly so later enhancement cannot
+paraphrase them away. Short prompts can be enhanced before clarification.
+
+The active UI does **not** present a separate plan-approval screen. Some older
+plan-page helpers remain in `ui/panel.py`, but `_commit_guided_and_build()`
+currently proceeds directly to `_start_guided_build()`. The generation
+pipeline still creates and validates an internal structured plan.
+
+## Studio
+
+During a job, the Studio view receives persistent status updates from
+`AODService` and shows progress through planning, grounding, provider work,
+generation, validation, and packaging.
+
+After success it exposes:
+
+- **Preview** — the generated activity running in a compatibility host;
+- **Review** — source, plan, verification state, and changes;
+- **Versions** — the revision lineage for the session;
+- **Refine** — a focused follow-up request against the active revision;
+- **Ship** — identity, icon, license, export, and installation actions.
+
+## Failure and recovery
+
+When generation or refinement fails after code exists, the last draft,
+diagnostics, plan, and repair history remain on the job. “Continue repairing”
+creates a new repair-only job from that state. It does not plan again or ask
+for another full file.
+
+Cancelling a queued job marks it cancelled immediately. A running job notices
+the cancellation through pipeline checkpoints and keeps persistence
+consistent.

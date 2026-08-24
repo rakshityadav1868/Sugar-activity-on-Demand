@@ -1,0 +1,11 @@
+{
+  "title": "Internals",
+  "icon": "Cpu",
+  "pages": [
+    "generation-pipeline",
+    "providers",
+    "persistence",
+    "security",
+    "ui-and-preview"
+  ]
+}

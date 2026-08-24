@@ -280,7 +280,20 @@ The codebase is organized by domain:
 
 The studio has two entry points that share the same `CreateAIActivityPanel` UI: `main.py` (standalone desktop window, via `bin/sugar-aod-studio`) and `activity.py` (`StudioActivity`, launched by `sugar-activity3` from the ring). Both depend only on the Sugar *toolkit* — never the shell (`jarabe`); `tests/test_studio.py` and `tests/test_activity_bundle.py` enforce that.
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full architecture map.
+The complete contributor documentation is available in the Fumadocs site
+under [`website/`](website/README.md). Start it with:
+
+```sh
+cd website
+npm install
+npm run dev
+```
+
+Then open <http://localhost:3000/docs>. The source pages cover setup, the user
+workflow, architecture, generation and repair, providers, persistence,
+security, exports, testing, troubleshooting, and contribution conventions.
+The earlier concise architecture map remains at
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 A test ensures that no `jarabe` module from the Sugar shell is imported, keeping the studio independent from the full Sugar desktop environment.
 

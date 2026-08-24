@@ -1,0 +1,91 @@
+---
+title: Generation Pipeline
+description: Planning, RAG, code generation, validation, repair, critic review, and project assembly.
+---
+
+`generation/pipeline.py` is the policy owner for initial generation,
+refinement, packaging changes, and repair continuation. Keep sequencing and
+fallback decisions here; specialized modules should remain independently
+testable.
+
+## Initial generation stages
+
+1. **Provider resolution** — resolve before enhancement so callers that pass a
+   provider name behave like callers that pass an object.
+2. **Enhancement** — expand a short prompt unless it already contains
+   confirmed requirements or an agreed plan.
+3. **Grounding** — build a local corpus and retrieve relevant Sugar manifests,
+   primary sources, support files, and built-in API/design references.
+4. **Planning** — ask the provider for structured JSON and normalize it. A
+   malformed plan gets one fresh attempt; transport failures do not loop after
+   HTTP retry handling.
+5. **Code generation** — ask once for the complete `activity.py` and extract it
+   from provider response formats.
+6. **Known repair** — apply deterministic fixes for recognized Sugar/GTK API
+   mistakes before spending a model repair attempt.
+7. **Acceptance gates** — run request-aware static validation and the runtime
+   check.
+8. **Transactional repair** — if a candidate fails, request exact patches,
+   apply them atomically, and re-run every required gate.
+9. **Critic** — ask the same provider for one checklist review. A critic patch
+   is accepted only if it re-passes validation and runtime.
+10. **Icon and assembly** — request and sanitize an SVG or use a deterministic
+    fallback, write the project, then optionally package its `.xo`.
+
+Progress fractions and messages are exposed through `_PipelineProgress` and
+mapped by the service into persistent job statuses.
+
+## Local-template path
+
+When no provider is selected, `generation/generator.py` infers an interaction
+family and builds a local plan. `generation/templates.py` renders one of the
+canvas, carrom, chess, grid, narrative, quiz, or utility templates.
+
+The provider path always enables RAG. `template_fallback` is an explicit caller
+option and applies only when no provider source candidate was produced. Once a
+candidate exists, failure must be repaired in place.
+
+## RAG behavior
+
+`generation/rag.py` scans:
+
+```text
+/usr/share/sugar/activities
+~/Activities
+```
+
+Generated AOD bundles are excluded to avoid recursively training the prompt on
+the studio's own output. The default corpus is cached and invalidated when
+activity roots or bundles change. Retrieval is deterministic token overlap,
+weighted toward titles and tags, with interaction-family hints added only to
+the search query.
+
+## Repair contract
+
+`generation/repair_loop.py` enforces:
+
+- response contains only patch blocks;
+- no `FULLREGEN` or complete-file replacement;
+- every search block matches exactly once;
+- all patches apply together or none apply;
+- provider credentials never appear in a candidate or error;
+- proposed source is verified before becoming active;
+- repeating hashes/cycles are rejected;
+- attempt history includes before, proposed, and after hashes plus rollback
+  state.
+
+Focused repair views from `generation/focus.py` can send only the relevant
+definitions and line windows for large sources. The active source itself is
+always complete and remains the patch authority.
+
+## Acceptance result
+
+`_check_activity_candidate()` returns structured diagnostics, including the
+static errors/warnings, runtime detail, and verification stage. A runtime skip
+caused by missing infrastructure is recorded as unverified rather than fed to
+the model as a candidate defect.
+
+The final plan records provider/model provenance, source hashes, runtime and
+critic outcomes, icon source, repair history, references, and generation
+options. `aod_plan.json` is therefore both restoration state and an audit
+artifact.

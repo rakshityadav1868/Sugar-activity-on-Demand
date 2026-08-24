@@ -1,0 +1,155 @@
+---
+title: Architecture
+description: Module boundaries, entry points, dependency direction, and extension seams.
+---
+
+Sugar Activity Studio is a local GTK application with a background application
+service and a file-backed data model. It has no web backend. Remote access is
+limited to the model provider selected by the user and optional packaging
+downloads/build inputs.
+
+![Layered system architecture showing both hosts, the shared UI, service,
+generation pipeline, providers, preview, exports, and persistence](/diagrams/system-architecture.svg)
+
+The diagram separates dependency direction from runtime I/O. The normal request
+path moves downward from presentation to application service to generation
+policy. Results and progress return through callbacks. Persistence, provider
+network calls, preview execution, and packaging are side effects at explicit
+boundaries rather than hidden behaviors inside widgets.
+
+## Layering
+
+The intended module-level dependency direction is:
+
+```text
+ui ──► service ──► generation ──► llm ──► core
+ │         │            │
+ │         │            ├──► preview (runtime harness path)
+ │         │            └──► Sugar bundlebuilder
+ ├──► preview
+ └──► exports
+```
+
+`exports` and `preview` are leaves used by higher layers. A deliberate
+exception allows `llm/providers.py` to reuse response extraction from
+`generation/codegen.py` and `generation/prompts.py`; it must not create a
+module-level cycle.
+
+## Entry points
+
+| Entry | Host | Top-level object |
+| --- | --- | --- |
+| `main.py` | normal Linux desktop | `ui.window.AODStudioWindow` |
+| `bin/sugar-aod-studio` | normal Linux desktop | resolves repo and calls `main.run()` |
+| `activity.py` | Sugar shell activity | `activity.StudioActivity` |
+| `setup.py` | Sugar bundlebuilder | dev link and `.xo` distribution commands |
+
+Both graphical hosts create `ui.panel.CreateAIActivityPanel`. Closing either
+host asks the panel to cancel active generation before teardown.
+
+## Domain modules
+
+### Core
+
+`core/spec.py` defines the provider-independent `ActivitySpec`, supported
+categories, templates, licenses, code sizes, normalization, validation, and
+prompt serialization. `core/licenses.py` maps SPDX identifiers to metadata and
+license text. `core/projects.py` discovers and reopens generated projects.
+
+### LLM boundary
+
+`llm/providers.py` defines the provider interface and all HTTP transports.
+`llm/credentials.py` manages Secret Service or local configuration. The other
+LLM modules build bounded prompts for enhancement, clarification, and reference
+analysis.
+
+### Generation domain
+
+`generation/pipeline.py` owns the end-to-end policy. Specialized modules own
+planning prompts, code prompts, templates, RAG, known repairs, transactional
+repair, validation, runtime execution, critic review, icons, refinement, and
+source reflection. `generation/generator.py` normalizes plans and materializes
+Sugar project artifacts.
+
+### Service boundary
+
+`service/service.py` is the public local backend. It validates submissions,
+resolves providers, writes messages, enqueues work, persists progress, restores
+jobs, creates revisions, and broadcasts callbacks. `service/queue.py` runs a
+small worker pool. `jobs.py` and `sessions.py` define serialized records.
+
+### Presentation and runtime
+
+`ui/panel.py` owns the application interaction flow. `ui/theme.py` provides
+CSS; `ring.py` lays out Home; `reference_image.py` handles reference-image
+normalization; `window.py` provides the desktop host. `preview/runner.py`
+patches generated code for in-process preview and cleans up its GTK/GLib
+resources.
+
+## Design constraints
+
+- The standalone application must never import Sugar shell modules such as
+  `jarabe`.
+- UI callbacks should submit to `AODService`, not call providers or the
+  generation pipeline directly.
+- Provider objects expose capability-oriented methods; transport quirks stay
+  inside provider classes.
+- Persistence uses atomic temporary-file replacement.
+- Generated source is untrusted input even when it came from a configured
+  model.
+- A valid revision is immutable in practice: refinement creates a child
+  project and revision.
+
+## Architectural decisions
+
+### One shared panel, two thin hosts
+
+Desktop and Sugar-ring launch modes differ only in their outer lifecycle. This
+keeps creation behavior, provider settings, persistence, and Studio tools
+identical. Host-specific logic belongs in `main.py`, `ui/window.py`, or
+`activity.py`; feature logic belongs in the panel or lower layers.
+
+### Local application service instead of a web backend
+
+The service provides background execution, persistence, recovery, cancellation,
+and observer callbacks inside the desktop process. There is no HTTP server
+between the GTK UI and generation. This reduces deployment complexity and
+keeps learner projects local, but requires strict GTK main-thread marshalling.
+
+### Policy orchestration separated from mechanisms
+
+`generation/pipeline.py` decides ordering and fallback behavior. Parsing,
+validation, repair transactions, runtime checks, templates, and packaging live
+in focused modules. This lets tests exercise a mechanism without paying for a
+provider call or complete generation.
+
+### Generated source has an explicit trust transition
+
+Provider output is not a project. It becomes an accepted activity only after
+extraction, deterministic known repairs, static request-aware validation,
+runtime verification when infrastructure exists, and optional critic review.
+The [state and security model](./state-and-security) documents where data may
+cross that boundary.
+
+### File-backed restoration is part of the product
+
+Jobs, sessions, revisions, plans, and project artifacts are not incidental
+cache files. They support restart recovery, repair continuation, version
+history, and reopening. Persisted schema changes therefore need compatibility
+fallbacks and tests.
+
+## Continue the architecture tour
+
+- [Components and ownership](./components) — every package, its contracts, and
+  safe extension seams.
+- [End-to-end data flow](./data-flow) — request sequence, generation gates,
+  repair transitions, and refinement lineage.
+- [State and security model](./state-and-security) — stored entities,
+  restoration behavior, trust zones, and privacy rules.
+
+## Sugar shell fork correspondence
+
+The standalone domains were extracted from an embedded Sugar shell fork. The
+mapping remains documented in the repository's `docs/ARCHITECTURE.md` for
+contributors porting fixes between the two forms. Keep behavior and tests in
+sync when a change is intended for both codebases.

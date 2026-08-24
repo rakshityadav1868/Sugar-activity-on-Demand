@@ -1,0 +1,88 @@
+---
+title: Contributor Guide
+description: Choose the right layer, implement safely, test behavior, and prepare a reviewable change.
+---
+
+## Before changing code
+
+1. Reproduce the behavior in the standalone app or a focused test.
+2. Read the owning module and its tests; many safety rules are encoded as
+   contract tests rather than comments.
+3. Identify the durable data affected: spec, job, session, plan, project, or
+   none.
+4. Decide whether the change also belongs in the embedded Sugar shell fork.
+5. Check whether documentation, configuration reference, or generated artifact
+   contracts must change with it.
+
+## Choose the owning layer
+
+| Change | Primary home |
+| --- | --- |
+| validation/normalization of learner input | `core/spec.py` |
+| provider HTTP payload or response | `llm/providers.py` |
+| saved key/model/endpoint | `llm/credentials.py` |
+| prompts and response parsing | focused `llm/` or `generation/` module |
+| generation sequence or fallback policy | `generation/pipeline.py` |
+| project files and plan normalization | `generation/generator.py` |
+| static/runtime acceptance | `generation/validator.py`, `runtime_check.py` |
+| background lifecycle or persistence | `service/` |
+| visual interaction | `ui/` |
+| accepted activity preview | `preview/` |
+| Flatpak output | `exports/flatpak.py` |
+| contributor/user explanation | `website/content/docs/` |
+
+Avoid bypassing the service from UI code or placing provider-specific branches
+throughout the pipeline.
+
+## Implementation rules
+
+- Maintain Python 3.8 compatibility.
+- Use only Sugar toolkit imports; never import `jarabe`.
+- Keep generated/model-controlled data untrusted until validated.
+- Make file publication atomic where partial output would corrupt recovery.
+- Bound network calls, retries, repair attempts, history, and subprocesses.
+- Preserve cancellation checks in long-running work.
+- Do not mutate a prior valid revision when refining.
+- Never persist reference pixels or provider secrets.
+- Keep local-template mode usable without a cloud provider.
+- Keep failures actionable and redact provider material before display.
+
+## Test-driven workflow
+
+Run the narrowest affected tests while iterating, then the full suite:
+
+```sh
+python3 -m pytest tests/test_pipeline.py -q
+python3 -m pytest tests/ -q
+python3 -m flake8 core llm generation service exports preview ui main.py activity.py
+```
+
+For documentation:
+
+```sh
+cd website
+npm run lint
+npm run typecheck
+npm run build
+```
+
+## Commit and review checklist
+
+- The change has a focused purpose and avoids unrelated formatting churn.
+- New behavior has acceptance and failure-path tests.
+- Existing user changes in the worktree are preserved.
+- Logs, errors, job JSON, session JSON, and `aod_plan.json` contain no keys or
+  binary references.
+- Runtime skip and runtime pass remain distinguishable.
+- Refinement/repair still rejects whole-file replacement and ambiguous patches.
+- Generated manifest, license, icon, version, and hashes remain internally
+  consistent.
+- User-visible behavior and contributor contracts are documented.
+- The full Python suite and Fumadocs production build pass.
+
+## Porting to or from the Sugar fork
+
+Use the correspondence table in the legacy `docs/ARCHITECTURE.md`. Port the
+behavior and its tests, adapting flat `jarabe` module names to standalone
+packages. Do not copy shell dependencies into this repository. Verify both
+launch modes after a shared UI change.

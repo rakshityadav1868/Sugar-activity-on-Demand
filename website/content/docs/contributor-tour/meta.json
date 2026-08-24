@@ -1,0 +1,13 @@
+{
+  "title": "Contributor Tour",
+  "icon": "Route",
+  "pages": [
+    "index",
+    "ui-state-machine",
+    "prompt-to-activity",
+    "studio-workspace",
+    "preview-and-live-edit",
+    "review-and-versions",
+    "change-recipes"
+  ]
+}

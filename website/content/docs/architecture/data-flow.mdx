@@ -1,0 +1,148 @@
+---
+title: End-to-End Data Flow
+description: Trace specs, jobs, plans, source, artifacts, and revisions through the system.
+---
+
+## Creation request
+
+```text
+UI selections + learner text
+        │
+        ▼
+ActivitySpec.validate() / normalized()
+        │
+        ▼
+AODService.submit_activity()
+        ├── ensure AODSession
+        ├── create and persist AODJob
+        ├── append user + status messages
+        └── enqueue job
+```
+
+`ActivitySpec` is the stable contract between UI, service, and generation. It
+contains the name, prompt, primary category, all selected categories, SPDX
+license, template preference, age band, learner goal, and code-size steering.
+
+## Initial generation sequence
+
+![Sequence from GTK submission through service persistence, worker execution,
+provider planning and code generation, verification, repair, assembly, and UI
+result rendering](/diagrams/generation-sequence.svg)
+
+The service writes the session and queued job before returning the job to the
+UI. A process crash after submission therefore leaves a recoverable record.
+The worker owns blocking provider and filesystem operations; progress callbacks
+do not transfer GTK widget ownership to that worker.
+
+## Worker and pipeline
+
+The worker resolves a runtime override, saved provider, or environment-backed
+provider. It passes a cancellation check and progress callback into
+`generate_activity()`.
+
+Progress metadata can include a draft source and repair event. The service
+persists meaningful updates, but reference-image bytes never enter the job's
+`to_dict()` representation.
+
+The pipeline produces a `GenerationResult` containing:
+
+| Field | Purpose |
+| --- | --- |
+| `spec` | normalized request used for the project |
+| `plan` | normalized plan plus verification and provenance metadata |
+| `project_path` | generated `.activity` source directory |
+| `bundle_id` | Sugar reverse-DNS identifier |
+| `bundle_path` | packaged `.xo`, if packaging has run |
+| `files` | readable project files keyed by relative path |
+| `provider`, `model` | provider identity used for generation |
+
+## Persistence on success
+
+The service summarizes the result into the job without embedding every file.
+It creates an `AODRevision`, links it to `parent_revision_id` when this was a
+refinement, appends a result message, and makes the revision active.
+
+```text
+session
+├── messages[]
+├── revisions[]
+│   └── result_summary.project_path ──► generated project
+└── active_revision_id
+```
+
+At startup, finished jobs are restored from summaries and on-disk artifacts.
+If artifacts are temporarily missing, the in-memory job is demoted without
+overwriting the finished record, allowing a future restart to recover it.
+Previously non-terminal jobs are marked failed because the prior process
+cannot still be running them.
+
+## Refinement lineage
+
+A refinement begins from the active revision's `activity.py` and plan. Its
+request is isolated from wrappers used by older UI versions. Successful source
+stores:
+
+- `original_source_hash` — first source in the lineage;
+- `parent_source_hash` — exact source being edited;
+- `source_hash` — newly shipped `activity.py`, including the layout bootstrap;
+- `activity_version` — parent version plus one;
+- recent refinement requests and bounded repair history.
+
+If validation fails, a `PipelineError` can carry the last source, diagnostics,
+repair history, and plan back to the service. That state enables an explicit
+repair continuation without overwriting the valid parent.
+
+## Repair state machine
+
+![Transactional repair state machine showing patch validation, atomic apply,
+verification, rollback, progress commits, success, and resumable
+failure](/diagrams/repair-state-machine.svg)
+
+There are two valid ways the active repair source can change:
+
+1. the candidate passes every required gate and repair succeeds;
+2. the verifier proves the candidate makes meaningful progress, so it becomes
+   the next active draft with updated diagnostics.
+
+Malformed, ambiguous, complete-file, secret-bearing, cyclic, or regressing
+proposals cannot mutate the active source. Exhaustion returns the best complete
+draft and its audit to persistence.
+
+## Refinement sequence
+
+Refinement deliberately skips enhancement, RAG, planning, and full generation:
+
+```text
+active revision source + latest learner instruction
+  → provider SEARCH/REPLACE response
+  → response/anchor/whole-file checks
+  → atomic candidate
+  → request-aware static gate
+  → runtime gate
+  → automatic repair if needed
+  → new project + child revision + version increment
+```
+
+If the initial refinement response cannot apply, automatic repair receives the
+requested change as its goal. It may repair from the parent only when no
+candidate patch existed. A result identical to the parent is rejected because
+it did not fulfill the requested change.
+
+## Reopen flow
+
+Home scans project directories for a parseable `aod_plan.json`. It then tries
+to find a matching session revision by `project_path`. When no session exists,
+`build_spec_from_plan()` reconstructs enough state to preview, review, package,
+or refine the project.
+
+## Cancellation and crash paths
+
+| Event | Durable result |
+| --- | --- |
+| cancel while queued | job becomes terminal `cancelled`; worker does not start |
+| cancel while running | cancellation flag persists; pipeline exits at a checkpoint |
+| application exits mid-job | startup marks the old non-terminal job failed |
+| provider fails before source exists | error only; optional explicit template fallback may apply |
+| pipeline fails after source exists | draft, plan, diagnostics, and repair audit persist |
+| finished project temporarily missing | job is demoted in memory only; next startup retries restore |
+| malformed job/session/project record | listing skips it so healthy records remain visible |

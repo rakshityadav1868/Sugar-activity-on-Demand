@@ -1,0 +1,104 @@
+---
+title: Sugar Activity Studio
+description: End-to-end documentation for using, understanding, and contributing to the AI-assisted Sugar activity builder.
+icon: BookOpen
+---
+
+Sugar Activity Studio turns a learner's plain-language idea into a real Sugar
+activity. It can enhance and clarify an idea, retrieve patterns from installed
+Sugar activities, ask a configured model to plan and write the code, validate
+and run the result, preview it, apply focused refinements, and export an
+installable bundle.
+
+This documentation is the contributor source of truth for the standalone
+repository. It covers both of its launch modes:
+
+- a normal Linux desktop window started by `python3 main.py` or
+  `bin/sugar-aod-studio`;
+- a Sugar activity started as `activity.StudioActivity` from the activity
+  ring.
+
+Both modes host the same `CreateAIActivityPanel` and depend on the Sugar
+toolkit, not the Sugar shell.
+
+## Start here
+
+| If you want to… | Read… |
+| --- | --- |
+| Install and run the studio | [Quick start](./getting-started) |
+| Set up a development checkout | [Development setup](./getting-started/development-setup) |
+| Understand the product on your first day | [Contributor tour](./contributor-tour) |
+| Trace prompt, UI, preview, and version behavior | [Prompt to activity](./contributor-tour/prompt-to-activity) |
+| Generate, refine, and export an activity | [User workflow](./user-guide) |
+| Understand module boundaries | [Architecture](./architecture) |
+| Trace a request through generation | [Generation pipeline](./internals/generation-pipeline) |
+| Add or debug a model provider | [LLM providers](./internals/providers) |
+| Understand saved jobs and revisions | [Persistence and service](./internals/persistence) |
+| Review safety boundaries | [Validation and security](./internals/security) |
+| Find every environment override | [Configuration](./reference/configuration) |
+| Prepare a contribution | [Contributor guide](./contributing) |
+
+## System at a glance
+
+```text
+learner idea
+    │
+    ▼
+GTK UI ──► local service ──► persistent job + session
+                                │
+                                ▼
+enhance/clarify ──► RAG ──► plan ──► one full code generation
+                                            │
+                                            ▼
+                              static validation + runtime gate
+                                            │
+                         failed ──► focused repair loop ──┐
+                                            │             │
+                                            └─────────────┘
+                                            │ passed
+                                            ▼
+                              critic ──► project ──► preview
+                                                     │
+                                      refine/version/export/install
+```
+
+The key invariant is that after the first complete `activity.py` candidate,
+the studio never fixes failure by silently generating another complete file.
+All corrections and refinements use exact, transactional `SEARCH/REPLACE`
+patches against the same source lineage.
+
+## Repository map
+
+| Path | Responsibility |
+| --- | --- |
+| `core/` | validated activity requests, license data, project discovery |
+| `llm/` | credentials, providers, enhancement, clarification, image analysis |
+| `generation/` | RAG, planning, code generation, repair, validation, packaging |
+| `service/` | background queue, persistent jobs, sessions, revisions |
+| `preview/` | shell-free execution of generated activities |
+| `exports/` | Flatpak source and bundle export |
+| `ui/` | GTK application flow and styling |
+| `activity.py`, `activity/` | Sugar activity entry point and manifest |
+| `packaging/appimage/` | portable desktop build |
+| `tests/` | unit, integration, contract, and safety regression tests |
+| `website/` | this Fumadocs site |
+
+## Core guarantees
+
+- Provider credentials stay local and provider errors are redacted before
+  persistence or display.
+- Reference-image pixels are memory-only and are not written into jobs,
+  sessions, plans, or projects.
+- Generated code is checked statically and, when the host permits it, executed
+  in a minimal-environment subprocess before acceptance.
+- Repairs are uniquely anchored, transactional, auditable, and bounded.
+- The preview substitutes a safe compatibility host; it does not require the
+  full Sugar shell.
+- Saved projects and conversations live under `~/.sugar/default/aod/` and can
+  be reopened after restart.
+
+<Callout type="info" title="Canonical implementation">
+The Python source and tests remain authoritative when documentation and code
+disagree. Treat that disagreement as a documentation bug and update both in
+the same contribution.
+</Callout>
