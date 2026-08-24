@@ -26,7 +26,26 @@ export default async function Page(props: PageProps<'/docs/[[...slug]]'>) {
   const markdownUrl = getPageMarkdownUrl(page).url;
 
   return (
-    <DocsPage toc={page.data.toc} full={page.data.full}>
+    <DocsPage
+      toc={page.data.toc}
+      full={page.data.full}
+      tableOfContent={{
+        style: 'normal',
+        container: {
+          className: 'docs-toc-rail',
+          'aria-label': 'Table of contents',
+        },
+        list: {
+          className: 'docs-toc-tree',
+          thumbBox: true,
+        },
+      }}
+      tableOfContentPopover={{
+        style: 'normal',
+        container: { className: 'docs-toc-popover' },
+        list: { className: 'docs-toc-tree', thumbBox: true },
+      }}
+    >
       <DocsTitle>{page.data.title}</DocsTitle>
       <DocsDescription className="mb-0">
         {page.data.description}

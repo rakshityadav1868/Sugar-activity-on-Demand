@@ -14,3 +14,61 @@ html > body[data-scroll-locked] {
   margin-right: 0 !important;
   --removed-body-scroll-bar-size: 0px !important;
 }
+
+/*
+ * Keep the desktop page outline visible as a real third column. Fumadocs
+ * supplies the active-anchor observer and the curved SVG hierarchy track;
+ * these rules make that behavior a stable part of this site's layout instead
+ * of limiting it to the library's extra-wide breakpoint.
+ */
+@media (min-width: 1120px) {
+  #nd-docs-layout {
+    --fd-toc-width: 284px !important;
+  }
+
+  #nd-toc.docs-toc-rail {
+    display: flex !important;
+    width: var(--fd-toc-width);
+    padding: 3rem 1.5rem 1rem 1.25rem;
+    border-inline-start: 1px solid color-mix(in srgb, var(--color-fd-border) 68%, transparent);
+    background: color-mix(in srgb, var(--color-fd-background) 96%, transparent);
+  }
+
+  [data-toc-popover].docs-toc-popover {
+    display: none !important;
+  }
+}
+
+#nd-toc.docs-toc-rail #toc-title {
+  margin-bottom: 0.35rem;
+  min-height: 1.75rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+
+#nd-toc.docs-toc-rail > div {
+  flex: 1;
+  padding-block: 0.75rem 1.5rem;
+  scroll-padding-block: 1rem;
+}
+
+.docs-toc-tree a {
+  line-height: 1.45;
+  text-decoration: none;
+}
+
+.docs-toc-tree a[data-active='true'] {
+  font-weight: 550;
+}
+
+.docs-toc-tree svg {
+  overflow: visible;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .docs-toc-tree svg,
+  .docs-toc-tree a {
+    transition: none !important;
+  }
+}
