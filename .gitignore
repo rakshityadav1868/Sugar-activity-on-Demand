@@ -8,6 +8,7 @@ build/
 *.AppImage
 packaging/appimage/tools/
 website/.next/
+website/.vercel/
 website/.source/
 website/node_modules/
 website/out/
