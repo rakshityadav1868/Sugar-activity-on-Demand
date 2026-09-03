@@ -18,9 +18,8 @@ import json
 import math
 
 from generation.focus import build_focused_view
-from generation.refine import REPLACE_MARKER
-from generation.refine import SEARCH_MARKER
 from generation.refine import apply_patches
+from generation.refine import iter_search_replace_blocks
 from generation.refine import parse_search_replace
 
 
@@ -613,25 +612,35 @@ def _normalize_check_result(value, fallback_diagnostics):
 
 
 def _contains_only_patch_blocks(response):
+    """Return whether nothing but protocol blocks and whitespace is present.
+
+    The check walks the raw block spans rather than rebuilding each block
+    from the parsed sections.  Rebuilding compared the response against a
+    normalized copy of itself, so any normalization the parser performs --
+    an empty REPLACE section for a deletion, or a blank line at the edge of
+    a section -- made the two strings differ and a perfectly valid patch
+    was thrown away as protocol noise.
+    """
+    if not isinstance(response, str):
+        return False
+    text = response.strip()
     try:
-        patches = parse_search_replace(response)
+        spans = [
+            (start, end)
+            for _search, _replace, start, end
+            in iter_search_replace_blocks(text)
+        ]
     except ValueError:
         return False
-    if not patches:
+    if not spans:
         return False
 
     position = 0
-    for search, replace in patches:
-        while position < len(response) and response[position].isspace():
-            position += 1
-        block = (
-            '%s\n%s\n=======\n%s\n%s'
-            % (SEARCH_MARKER, search, replace, REPLACE_MARKER)
-        )
-        if not response.startswith(block, position):
+    for start, end in spans:
+        if text[position:start].strip():
             return False
-        position += len(block)
-    return not response[position:].strip()
+        position = end
+    return not text[position:].strip()
 
 
 def _apply_patches_transactionally(source, patches):

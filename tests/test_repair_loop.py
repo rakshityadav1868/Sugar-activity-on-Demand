@@ -6,12 +6,15 @@ import json
 import os
 import unittest
 
+from generation.refine import apply_patches
+from generation.refine import parse_search_replace
 from generation.repair_loop import RepairCheckResult
 from generation.repair_loop import build_repair_system_prompt
 from generation.repair_loop import build_repair_user_prompt
 from generation.repair_loop import patches_match_uniquely
 from generation.repair_loop import patches_replace_whole_file
 from generation.repair_loop import repair_candidate
+from generation.repair_loop import response_contains_only_patches
 
 
 _SOURCE = (
@@ -574,6 +577,71 @@ class TestRepairFocus(unittest.TestCase):
         self.assertEqual(
             focused, build_repair_user_prompt(_SOURCE, 'boom', 1,
                                               focused_view=None))
+
+
+class TestResponseContainsOnlyPatches(unittest.TestCase):
+    """The protocol gate must accept every well-formed patch response."""
+
+    def test_accepts_a_plain_block(self):
+        self.assertTrue(response_contains_only_patches(
+            _patch('        value = "broken"', '        value = "ok"')))
+
+    def test_accepts_several_blocks(self):
+        response = '%s\n%s' % (
+            _patch('    def status(self):', '    def state(self):'),
+            _patch('        return value', '        return value.upper()'),
+        )
+        self.assertTrue(response_contains_only_patches(response))
+
+    def test_accepts_a_deletion_with_an_empty_replace_section(self):
+        # Removing a stray line is a normal repair; the REPLACE section is
+        # empty and the block is still exact protocol.
+        response = (
+            '<<<<<<< SEARCH\n'
+            '        value = "broken"\n'
+            '=======\n'
+            '>>>>>>> REPLACE\n'
+        )
+        self.assertTrue(response_contains_only_patches(response))
+        patches = parse_search_replace(response)
+        patched, applied, failed = apply_patches(_SOURCE, patches)
+        self.assertEqual((applied, failed), (1, 0))
+        self.assertNotIn('broken', patched)
+
+    def test_accepts_blank_lines_at_a_section_edge(self):
+        # A block that spans a blank line keeps that line at the edge of the
+        # section; that is still one exact block, not protocol noise.
+        response = (
+            '<<<<<<< SEARCH\n'
+            '    def status(self):\n'
+            '        value = "broken"\n'
+            '\n'
+            '=======\n'
+            '    def status(self):\n'
+            '        value = "ok"\n'
+            '\n'
+            '>>>>>>> REPLACE\n'
+        )
+        self.assertTrue(response_contains_only_patches(response))
+
+    def test_rejects_prose_around_a_block(self):
+        block = _patch('        value = "broken"', '        value = "ok"')
+        self.assertFalse(response_contains_only_patches(
+            'Here is the fix:\n%s' % block))
+        self.assertFalse(response_contains_only_patches(
+            '%s\nLet me know if that helps.' % block))
+
+    def test_rejects_prose_between_blocks(self):
+        response = '%s\nand also\n%s' % (
+            _patch('    def status(self):', '    def state(self):'),
+            _patch('        return value', '        return value.upper()'),
+        )
+        self.assertFalse(response_contains_only_patches(response))
+
+    def test_rejects_non_patch_text(self):
+        self.assertFalse(response_contains_only_patches('OK'))
+        self.assertFalse(response_contains_only_patches(''))
+        self.assertFalse(response_contains_only_patches(None))
 
 
 def _hash_for_test(source):

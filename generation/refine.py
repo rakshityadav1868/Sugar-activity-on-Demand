@@ -213,6 +213,57 @@ def validate_refinement_result(current_source, candidate_source, request):
     return errors
 
 
+def iter_search_replace_blocks(text):
+    """Yield (search, replace, start, end) for every block in ``text``.
+
+    ``start`` and ``end`` bound the raw block, from the SEARCH marker
+    through the REPLACE marker, so a caller can inspect what sits
+    between blocks instead of re-serializing the parsed sections and
+    comparing that against the response.  Raises ValueError on a
+    malformed block, exactly like parse_search_replace().
+    """
+    pos = 0
+    nl_divider = '\n' + DIVIDER_MARKER
+    nl_replace = '\n' + REPLACE_MARKER
+
+    while True:
+        search_start = text.find(SEARCH_MARKER, pos)
+        if search_start < 0:
+            return
+
+        after_search = search_start + len(SEARCH_MARKER)
+
+        # Anchor to line boundary so '=======' inside source code is ignored.
+        divider_nl = text.find(nl_divider, after_search)
+        if divider_nl < 0:
+            raise ValueError(
+                'Malformed SEARCH/REPLACE: missing ======= divider after '
+                '<<<<<<< SEARCH at position %d.' % search_start
+            )
+        after_divider = divider_nl + len(nl_divider)
+
+        # Same anchoring for >>>>>>> REPLACE.
+        replace_nl = text.find(nl_replace, after_divider)
+        if replace_nl < 0:
+            raise ValueError(
+                'Malformed SEARCH/REPLACE: missing >>>>>>> REPLACE after '
+                '======= divider at position %d.' % divider_nl
+            )
+
+        search_text = _strip_block_edges(text[after_search:divider_nl])
+        replace_text = _strip_block_edges(text[after_divider:replace_nl])
+
+        if not search_text:
+            raise ValueError(
+                'Malformed SEARCH/REPLACE: empty SEARCH section at '
+                'position %d.' % search_start
+            )
+
+        block_end = replace_nl + len(nl_replace)
+        yield search_text, replace_text, search_start, block_end
+        pos = block_end
+
+
 def parse_search_replace(response):
     """Parse SEARCH/REPLACE blocks from a model response.
 
@@ -229,46 +280,10 @@ def parse_search_replace(response):
     if text.startswith('FULLREGEN') and SEARCH_MARKER not in text:
         return None
 
-    blocks = []
-    pos = 0
-    _NL_DIVIDER = '\n' + DIVIDER_MARKER
-    _NL_REPLACE = '\n' + REPLACE_MARKER
-
-    while True:
-        search_start = text.find(SEARCH_MARKER, pos)
-        if search_start < 0:
-            break
-
-        after_search = search_start + len(SEARCH_MARKER)
-
-        # Anchor to line boundary so '=======' inside source code is ignored.
-        divider_nl = text.find(_NL_DIVIDER, after_search)
-        if divider_nl < 0:
-            raise ValueError(
-                'Malformed SEARCH/REPLACE: missing ======= divider after '
-                '<<<<<<< SEARCH at position %d.' % search_start
-            )
-        after_divider = divider_nl + len(_NL_DIVIDER)
-
-        # Same anchoring for >>>>>>> REPLACE.
-        replace_nl = text.find(_NL_REPLACE, after_divider)
-        if replace_nl < 0:
-            raise ValueError(
-                'Malformed SEARCH/REPLACE: missing >>>>>>> REPLACE after '
-                '======= divider at position %d.' % divider_nl
-            )
-
-        search_text = _strip_block_edges(text[after_search:divider_nl])
-        replace_text = _strip_block_edges(text[after_divider:replace_nl])
-
-        if not search_text:
-            raise ValueError(
-                'Malformed SEARCH/REPLACE: empty SEARCH section at '
-                'position %d.' % search_start
-            )
-
-        blocks.append((search_text, replace_text))
-        pos = replace_nl + len(_NL_REPLACE)
+    blocks = [
+        (search, replace)
+        for search, replace, _start, _end in iter_search_replace_blocks(text)
+    ]
 
     if not blocks:
         if '<<<<<<<' not in text:
